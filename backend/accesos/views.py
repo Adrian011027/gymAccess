@@ -1,0 +1,108 @@
+from django.db import models
+from django.db.models import Count
+from django.db.models.functions import ExtractHour
+from django.utils import timezone
+from rest_framework import viewsets, permissions, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from .models import Acceso, MetodoAcceso
+from .serializers import AccesoSerializer, MetodoAccesoSerializer
+from socios.models import Membresia
+
+
+class MetodoAccesoViewSet(viewsets.ModelViewSet):
+    serializer_class = MetodoAccesoSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return MetodoAcceso.objects.filter(socio__gym_id=self.request.user.gym_id)
+
+
+class AccesoViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = AccesoSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Acceso.objects.filter(
+            socio__gym_id=self.request.user.gym_id
+        ).select_related('socio', 'sucursal').order_by('-timestamp')
+
+
+class CheckInView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        token = request.data.get('token')
+        sucursal_id = request.data.get('sucursal_id')
+
+        try:
+            metodo = MetodoAcceso.objects.select_related('socio').get(token=token, activo=True)
+        except MetodoAcceso.DoesNotExist:
+            return Response({'error': 'Token inválido'}, status=status.HTTP_404_NOT_FOUND)
+
+        socio = metodo.socio
+        hoy = timezone.localdate()
+
+        membresia = Membresia.objects.filter(
+            socio=socio,
+            estado='activa',
+            fecha_inicio__lte=hoy,
+        ).filter(
+            models.Q(fecha_fin__gte=hoy) | models.Q(fecha_fin__isnull=True)
+        ).first()
+
+        if not membresia:
+            Acceso.objects.create(
+                socio=socio,
+                sucursal_id=sucursal_id,
+                metodo_usado=metodo.tipo,
+                resultado='denegado',
+                motivo_denegado='sin_membresia' if not Membresia.objects.filter(socio=socio).exists() else 'membresia_vencida',
+            )
+            return Response({'acceso': 'denegado', 'motivo': 'membresía no activa'}, status=status.HTTP_403_FORBIDDEN)
+
+        Acceso.objects.create(
+            socio=socio,
+            sucursal_id=sucursal_id,
+            membresia=membresia,
+            metodo_usado=metodo.tipo,
+            resultado='permitido',
+        )
+        return Response({
+            'acceso': 'permitido',
+            'socio': f'{socio.nombre} {socio.apellido}',
+            'plan': membresia.plan.nombre,
+            'vence': membresia.fecha_fin,
+        })
+
+
+class StatsView(APIView):
+    """Dashboard analytics: horarios concurridos + totales del gym."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        gym_id = request.user.gym_id
+        hoy = timezone.localdate()
+        inicio_mes = hoy.replace(day=1)
+
+        accesos_qs = Acceso.objects.filter(
+            socio__gym_id=gym_id,
+            resultado='permitido',
+        )
+
+        por_hora = (
+            accesos_qs
+            .annotate(hora=ExtractHour('timestamp'))
+            .values('hora')
+            .annotate(total=Count('id'))
+            .order_by('hora')
+        )
+
+        accesos_hoy = accesos_qs.filter(timestamp__date=hoy).count()
+        accesos_mes = accesos_qs.filter(timestamp__date__gte=inicio_mes).count()
+
+        return Response({
+            'horarios_concurridos': list(por_hora),
+            'accesos_hoy': accesos_hoy,
+            'accesos_mes': accesos_mes,
+        })

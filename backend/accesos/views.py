@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from .models import Acceso, MetodoAcceso
 from .serializers import AccesoSerializer, MetodoAccesoSerializer
-from socios.models import Membresia
+from socios.models import Membresia, Socio
 
 
 class MetodoAccesoViewSet(viewsets.ModelViewSet):
@@ -16,6 +16,33 @@ class MetodoAccesoViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return MetodoAcceso.objects.filter(socio__gym_id=self.request.user.gym_id)
+
+
+class SincronizarHuellaView(APIView):
+    """Recibe el template ya capturado/matcheado por el agente local (SDK del lector)
+    y lo asocia al socio como MetodoAcceso tipo huella."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        socio_id = request.data.get('socio_id')
+        template = request.data.get('template')
+
+        if not socio_id or not template:
+            return Response({'error': 'socio_id y template son requeridos'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            socio = Socio.objects.get(id=socio_id, gym_id=request.user.gym_id)
+        except Socio.DoesNotExist:
+            return Response({'error': 'Socio no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+
+        if MetodoAcceso.objects.filter(token=template).exclude(socio=socio).exists():
+            return Response({'error': 'Esta huella ya está registrada a otro socio'}, status=status.HTTP_409_CONFLICT)
+
+        metodo, _ = MetodoAcceso.objects.update_or_create(
+            socio=socio, tipo='huella',
+            defaults={'token': template, 'activo': True},
+        )
+        return Response(MetodoAccesoSerializer(metodo).data, status=status.HTTP_200_OK)
 
 
 class AccesoViewSet(viewsets.ReadOnlyModelViewSet):

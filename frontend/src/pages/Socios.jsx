@@ -45,9 +45,42 @@ export default function Socios() {
   const [search, setSearch] = useState('')
   const [filtro, setFiltro] = useState('todos')
   const [loading, setLoading] = useState(false)
+  const [huellaModal, setHuellaModal] = useState(null)
+  const [huellaEstado, setHuellaEstado] = useState('idle') // idle | esperando | ok | error
+  const [huellaMsg, setHuellaMsg] = useState('')
 
   const load = () => api.get('/socios/').then(r => setSocios(r.data)).catch(() => {})
   useEffect(() => { load() }, [])
+
+  const abrirSincronizarHuella = socio => {
+    setHuellaModal(socio)
+    setHuellaEstado('idle')
+    setHuellaMsg('')
+  }
+
+  // El agente local (SDK DigitalPersona U.are.U 4500) expone window.fingerprintAgent
+  // cuando corre en la PC de la sucursal; en su ausencia, solo se muestra el estado del backend.
+  const capturarHuella = async () => {
+    if (!huellaModal) return
+    setHuellaEstado('esperando')
+    setHuellaMsg('Coloca el dedo en el lector...')
+    try {
+      if (!window.fingerprintAgent?.capturar) {
+        throw new Error('Agente de huella no detectado en esta PC')
+      }
+      const template = await window.fingerprintAgent.capturar()
+      const { data } = await api.post('/accesos/sincronizar-huella/', {
+        socio_id: huellaModal.id,
+        template,
+      })
+      setHuellaEstado('ok')
+      setHuellaMsg('Huella sincronizada correctamente')
+      toast.success(`Huella registrada para ${huellaModal.nombre}`)
+    } catch (err) {
+      setHuellaEstado('error')
+      setHuellaMsg(err.response?.data?.error || err.message || 'Error al capturar huella')
+    }
+  }
 
   const save = async e => {
     e.preventDefault()
@@ -187,11 +220,18 @@ export default function Socios() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button onClick={() => { setForm(s); setModal(true) }} style={{ color: '#8b949e' }} className="hover:text-white transition-colors">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    </button>
+                    <div className="flex items-center justify-end gap-3">
+                      <button onClick={() => abrirSincronizarHuella(s)} title="Sincronizar huella" style={{ color: '#8b949e' }} className="hover:text-white transition-colors">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11c1.5 0 2 1 2 2.5S13 17 12 17s-2-1-2-2.5.5-3.5 2-3.5zm0-7a7 7 0 00-7 7c0 1.5.5 3 2 4.5M12 4a7 7 0 017 7c0 3-1 5-3 7M9 8.5a3 3 0 016 0c0 .5-.1 1-.3 1.5" />
+                        </svg>
+                      </button>
+                      <button onClick={() => { setForm(s); setModal(true) }} style={{ color: '#8b949e' }} className="hover:text-white transition-colors">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )
@@ -260,6 +300,48 @@ export default function Socios() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {huellaModal && (
+        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-sm text-center" style={CARD_STYLE}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-bold text-white">Sincronizar huella</h2>
+              <button onClick={() => setHuellaModal(null)} style={{ color: '#8b949e' }} className="hover:text-white">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            <p className="text-xs mb-4" style={{ color: '#8b949e' }}>
+              {huellaModal.nombre} {huellaModal.apellido}
+            </p>
+
+            <div className="flex items-center justify-center mb-4">
+              <div className="w-20 h-20 rounded-full flex items-center justify-center"
+                style={{
+                  backgroundColor: huellaEstado === 'ok' ? 'rgba(34,197,94,0.15)' : huellaEstado === 'error' ? 'rgba(239,68,68,0.15)' : 'rgba(139,148,158,0.1)',
+                }}>
+                <svg className="w-9 h-9" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                  style={{ color: huellaEstado === 'ok' ? '#22c55e' : huellaEstado === 'error' ? '#ef4444' : '#8b949e' }}>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 11c1.5 0 2 1 2 2.5S13 17 12 17s-2-1-2-2.5.5-3.5 2-3.5zm0-7a7 7 0 00-7 7c0 1.5.5 3 2 4.5M12 4a7 7 0 017 7c0 3-1 5-3 7M9 8.5a3 3 0 016 0c0 .5-.1 1-.3 1.5" />
+                </svg>
+              </div>
+            </div>
+
+            <p className="text-xs mb-5 min-h-[1rem]" style={{ color: huellaEstado === 'error' ? '#ef4444' : huellaEstado === 'ok' ? '#22c55e' : '#8b949e' }}>
+              {huellaMsg || 'Coloca el dedo en el lector cuando estés listo'}
+            </p>
+
+            <button
+              onClick={capturarHuella}
+              disabled={huellaEstado === 'esperando'}
+              className="w-full py-2.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+              style={{ backgroundColor: '#22c55e', color: '#0d1117' }}
+            >
+              {huellaEstado === 'esperando' ? 'Leyendo...' : 'Capturar huella'}
+            </button>
           </div>
         </div>
       )}

@@ -59,7 +59,11 @@ class CheckInView(APIView):
                 resultado='denegado',
                 motivo_denegado='sin_membresia' if not Membresia.objects.filter(socio=socio).exists() else 'membresia_vencida',
             )
-            return Response({'acceso': 'denegado', 'motivo': 'membresía no activa'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({
+                'acceso': 'denegado',
+                'socio': f'{socio.nombre} {socio.apellido}',
+                'motivo': 'membresía no activa',
+            }, status=status.HTTP_403_FORBIDDEN)
 
         Acceso.objects.create(
             socio=socio,
@@ -71,6 +75,7 @@ class CheckInView(APIView):
         return Response({
             'acceso': 'permitido',
             'socio': f'{socio.nombre} {socio.apellido}',
+            'foto': request.build_absolute_uri(socio.foto.url) if socio.foto else None,
             'plan': membresia.plan.nombre,
             'vence': membresia.fecha_fin,
         })

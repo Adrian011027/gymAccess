@@ -14,8 +14,9 @@ export default function Login() {
     e.preventDefault()
     setLoading(true)
     try {
-      await login(form.email, form.password)
-      navigate('/dashboard')
+      const payload = await login(form.email, form.password)
+      const esAdmin = payload?.rol === 'admin' || payload?.rol === 'superadmin'
+      navigate(esAdmin ? '/dashboard' : '/checkin')
     } catch {
       toast.error('Credenciales incorrectas')
     } finally {

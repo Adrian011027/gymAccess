@@ -67,7 +67,7 @@ export default function Clases() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-black text-white uppercase tracking-wide">CLASES</h2>
           <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>{clases.length} clases programadas</p>
@@ -113,7 +113,7 @@ export default function Clases() {
           const nc = NIVEL_COLORS[c.nivel] || NIVEL_COLORS.todos
           return (
             <div key={c.id} className="rounded-xl p-5" style={CARD_STYLE}>
-              <div className="flex items-start justify-between">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div className="flex items-start gap-4">
                   <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style={{ backgroundColor: 'rgba(34,197,94,0.1)' }}>
                     <svg className="w-5 h-5 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -172,7 +172,7 @@ export default function Clases() {
 
       {/* Modal */}
       {modal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
           <div className="rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-sm font-bold text-white">{form.id ? 'Editar clase' : 'Nueva clase'}</h2>

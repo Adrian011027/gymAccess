@@ -1,11 +1,12 @@
 from rest_framework import viewsets, permissions
 from .models import Usuario
+from .permissions import EsAdminGym
 from .serializers import UsuarioSerializer
 
 
 class UsuarioViewSet(viewsets.ModelViewSet):
     serializer_class = UsuarioSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, EsAdminGym]
 
     def get_queryset(self):
         user = self.request.user

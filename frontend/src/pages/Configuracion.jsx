@@ -51,7 +51,7 @@ export default function Configuracion() {
       <h2 className="text-xl font-black text-white uppercase tracking-wide">CONFIGURACIÓN</h2>
       <p className="text-xs -mt-3" style={{ color: '#8b949e' }}>Administración del sistema</p>
 
-      <div className="grid grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Gym info */}
         <div className="rounded-xl p-6" style={CARD_STYLE}>
           <div className="flex items-center gap-2 mb-5">
@@ -161,7 +161,7 @@ export default function Configuracion() {
           </div>
         </div>
         <div className="rounded-xl p-5" style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <p className="text-sm font-bold text-white">{plan.nombre}</p>
               <p className="text-[10px] mt-0.5" style={{ color: '#8b949e' }}>{plan.descripcion}</p>

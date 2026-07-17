@@ -64,7 +64,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-5">
       {/* Stat cards */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-xl p-5 flex items-center gap-4" style={CARD_STYLE}>
           <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: 'rgba(34,197,94,0.1)' }}>
             <svg className="w-5 h-5 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -106,7 +106,7 @@ export default function Dashboard() {
       </div>
 
       {/* Resumen financiero badge */}
-      <div className="rounded-xl p-4 flex items-center justify-between" style={CARD_STYLE}>
+      <div className="rounded-xl p-4 flex items-center justify-between flex-wrap gap-2" style={CARD_STYLE}>
         <div className="flex items-center gap-2">
           <svg className="w-4 h-4 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
@@ -121,9 +121,9 @@ export default function Dashboard() {
       </div>
 
       {/* Charts row */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Afluencia */}
-        <div className="col-span-2 rounded-xl p-5" style={CARD_STYLE}>
+        <div className="lg:col-span-2 rounded-xl p-5" style={CARD_STYLE}>
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <svg className="w-4 h-4 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -208,7 +208,7 @@ export default function Dashboard() {
             {new Date().toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/^\w/, c => c.toUpperCase())}
           </span>
         </div>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {CLASES_HOY_MOCK.map((c, i) => {
             const pct = Math.round((c.ocupacion / c.cupo) * 100)
             const barColor = pct >= 100 ? '#ef4444' : pct >= 80 ? '#22c55e' : '#3b82f6'

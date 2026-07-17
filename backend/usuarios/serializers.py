@@ -1,5 +1,19 @@
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import Usuario
+
+
+class LoginSerializer(TokenObtainPairSerializer):
+    """JWT con datos del usuario para que el frontend conozca su rol."""
+
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        token['nombre'] = user.nombre
+        token['email'] = user.email
+        token['rol'] = user.rol
+        token['gym_id'] = user.gym_id
+        return token
 
 
 class UsuarioSerializer(serializers.ModelSerializer):

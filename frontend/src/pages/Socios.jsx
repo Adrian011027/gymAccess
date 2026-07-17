@@ -81,7 +81,7 @@ export default function Socios() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-black text-white uppercase tracking-wide">SOCIOS</h2>
           <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>{activos} activos · {inactivos} inactivos</p>
@@ -97,8 +97,8 @@ export default function Socios() {
         </button>
       </div>
 
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg flex-1 max-w-md" style={CARD_STYLE}>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg flex-1 sm:max-w-md" style={CARD_STYLE}>
           <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: '#8b949e' }}>
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
@@ -110,7 +110,7 @@ export default function Socios() {
             className="bg-transparent text-sm w-full outline-none text-white placeholder:text-[#3d444d]"
           />
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-1 flex-wrap">
           {[['todos', 'Todos'], ['activos', 'Activos'], ['inactivos', 'Inactivos']].map(([v, l]) => (
             <button
               key={v}
@@ -126,10 +126,11 @@ export default function Socios() {
       </div>
 
       <div className="rounded-xl overflow-hidden" style={CARD_STYLE}>
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[920px]">
           <thead style={{ borderBottom: '1px solid #21262d' }}>
             <tr>
-              {['SOCIO', 'EDAD', 'PLAN', 'ANTIGÜEDAD', 'F. NACIMIENTO', 'PRÓX. PAGO', 'ESTADO', ''].map(h => (
+              {['SOCIO', 'CÓDIGO', 'EDAD', 'PLAN', 'ANTIGÜEDAD', 'F. NACIMIENTO', 'PRÓX. PAGO', 'ESTADO', ''].map(h => (
                 <th key={h} className="px-4 py-3 text-left text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>{h}</th>
               ))}
             </tr>
@@ -150,6 +151,20 @@ export default function Socios() {
                       </div>
                       <span className="text-xs font-semibold text-white">{s.nombre} {s.apellido}</span>
                     </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    {s.codigo_acceso ? (
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(s.codigo_acceso); toast.success('Código copiado') }}
+                        title="Clic para copiar"
+                        className="text-[10px] font-mono px-2 py-1 rounded transition-opacity hover:opacity-70"
+                        style={{ backgroundColor: 'rgba(34,197,94,0.08)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.25)' }}
+                      >
+                        {s.codigo_acceso}
+                      </button>
+                    ) : (
+                      <span className="text-[10px]" style={{ color: '#3d444d' }}>Sin código</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-xs" style={{ color: '#8b949e' }}>{edad(s.fecha_nacimiento)}</td>
                   <td className="px-4 py-3">
@@ -182,14 +197,15 @@ export default function Socios() {
               )
             })}
             {filtered.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-10 text-center text-xs" style={{ color: '#3d444d' }}>Sin socios</td></tr>
+              <tr><td colSpan={9} className="px-4 py-10 text-center text-xs" style={{ color: '#3d444d' }}>Sin socios</td></tr>
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {modal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
           <div className="rounded-2xl p-6 w-full max-w-md" style={CARD_STYLE}>
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-sm font-bold text-white">{form.id ? 'Editar socio' : 'Nuevo socio'}</h2>

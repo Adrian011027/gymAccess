@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import api from '../api/axios'
 import toast from 'react-hot-toast'
+import { useAuth } from '../context/AuthContext'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 
@@ -9,6 +10,7 @@ function avatarColor(name = '') { return AVATAR_COLORS[(name.charCodeAt(0) || 0)
 function initials(name = '') { return name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase() }
 
 export default function Pagos() {
+  const { isAdmin } = useAuth()
   const [membresias, setMembresias] = useState([])
   const [tab, setTab] = useState('hoy')
   const [loading, setLoading] = useState(false)
@@ -51,13 +53,13 @@ export default function Pagos() {
     <div className="space-y-5">
       <h2 className="text-xl font-black text-white uppercase tracking-wide">PAGOS</h2>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-4 gap-4">
+      {/* Stat cards — el total cobrado solo lo ve el admin */}
+      <div className={`grid grid-cols-2 gap-4 ${isAdmin ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
         {[
           { icon: '⏱', label: 'Pendientes hoy', value: pendHoy.length, color: '#f97316' },
           { icon: '📅', label: 'Esta semana', value: pendSem.length, color: '#3b82f6' },
           { icon: '⚠', label: 'Atrasados', value: atrasados.length, color: '#ef4444' },
-          { icon: '✓', label: 'Cobrado este mes', value: `$${totalCobradoMes.toLocaleString()}`, color: '#22c55e' },
+          ...(isAdmin ? [{ icon: '✓', label: 'Cobrado este mes', value: `$${totalCobradoMes.toLocaleString()}`, color: '#22c55e' }] : []),
         ].map(s => (
           <div key={s.label} className="rounded-xl p-4 flex items-center gap-3" style={CARD_STYLE}>
             <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm shrink-0"
@@ -73,7 +75,7 @@ export default function Pagos() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1">
+      <div className="flex gap-1 flex-wrap">
         {tabs.map(t => (
           <button
             key={t.key}
@@ -93,7 +95,7 @@ export default function Pagos() {
           <p className="text-center text-xs py-8" style={{ color: '#3d444d' }}>Sin pagos en este período</p>
         )}
         {lista.map(m => (
-          <div key={m.id} className="flex items-center justify-between py-3" style={{ borderBottom: '1px solid #21262d' }}>
+          <div key={m.id} className="flex items-center justify-between gap-3 flex-wrap py-3" style={{ borderBottom: '1px solid #21262d' }}>
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
                 style={{ backgroundColor: avatarColor(m.socio_nombre), color: '#0d1117' }}>

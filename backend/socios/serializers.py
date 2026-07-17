@@ -10,10 +10,16 @@ class PlanSerializer(serializers.ModelSerializer):
 
 class SocioSerializer(serializers.ModelSerializer):
     membresia_activa = serializers.SerializerMethodField()
+    codigo_acceso = serializers.SerializerMethodField()
 
     class Meta:
         model = Socio
         fields = '__all__'
+        extra_kwargs = {'gym': {'required': False}}
+
+    def get_codigo_acceso(self, obj):
+        m = next((m for m in obj.metodos_acceso.all() if m.activo), None)
+        return m.token if m else None
 
     def get_membresia_activa(self, obj):
         m = obj.membresias.filter(estado='activa').first()

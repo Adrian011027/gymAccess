@@ -16,27 +16,39 @@ function useNow() {
   }).replace(/^\w/, c => c.toUpperCase())
 }
 
-export default function Navbar() {
+export default function Navbar({ onMenuClick }) {
   const location = useLocation()
   const pageLabel = ROUTE_LABELS[location.pathname] || 'GymAccess'
   const dateStr = useNow()
 
   return (
     <header
-      className="h-16 flex items-center justify-between px-6 shrink-0"
+      className="h-16 flex items-center justify-between px-4 sm:px-6 shrink-0 gap-3"
       style={{ backgroundColor: '#0d1117', borderBottom: '1px solid #21262d' }}
     >
-      {/* Left: page title + date */}
-      <div>
-        <h1 className="text-sm font-black tracking-widest text-white uppercase">{pageLabel}</h1>
-        <p className="text-[10px] mt-0.5 capitalize" style={{ color: '#8b949e' }}>{dateStr}</p>
+      {/* Left: menu (móvil) + page title + date */}
+      <div className="flex items-center gap-3 min-w-0">
+        <button
+          onClick={onMenuClick}
+          className="lg:hidden p-2 rounded-lg shrink-0"
+          style={{ backgroundColor: '#161b22', border: '1px solid #21262d', color: '#8b949e' }}
+          aria-label="Abrir menú"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <div className="min-w-0">
+          <h1 className="text-sm font-black tracking-widest text-white uppercase truncate">{pageLabel}</h1>
+          <p className="text-[10px] mt-0.5 capitalize truncate" style={{ color: '#8b949e' }}>{dateStr}</p>
+        </div>
       </div>
 
       {/* Right: search + bell + gym status */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
         {/* Search */}
         <div
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
+          className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg"
           style={{ backgroundColor: '#161b22', border: '1px solid #21262d' }}
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: '#8b949e' }}>
@@ -65,11 +77,11 @@ export default function Navbar() {
 
         {/* Gym status */}
         <div
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold"
           style={{ backgroundColor: '#161b22', border: '1px solid #21262d', color: '#22c55e' }}
         >
           <span className="w-1.5 h-1.5 rounded-full bg-[#22c55e] animate-pulse" />
-          Gym Abierto
+          <span className="hidden sm:inline">Gym Abierto</span>
         </div>
       </div>
     </header>

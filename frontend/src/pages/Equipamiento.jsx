@@ -50,7 +50,7 @@ export default function Equipamiento() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-black text-white uppercase tracking-wide">EQUIPAMIENTO</h2>
           <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>{total} ítems en inventario</p>
@@ -85,7 +85,8 @@ export default function Equipamiento() {
 
       {/* Table */}
       <div className="rounded-xl overflow-hidden" style={CARD_STYLE}>
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[640px]">
           <thead style={{ borderBottom: '1px solid #21262d' }}>
             <tr>
               {['ÍTEM', 'CATEGORÍA', 'CANTIDAD', 'ÚLTIMA REVISIÓN', 'UBICACIÓN', ''].map(h => (
@@ -115,11 +116,12 @@ export default function Equipamiento() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Modal */}
       {modal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
           <div className="rounded-2xl p-6 w-full max-w-md" style={CARD_STYLE}>
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-sm font-bold text-white">{form.id ? 'Editar ítem' : 'Añadir ítem'}</h2>

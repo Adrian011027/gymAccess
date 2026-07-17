@@ -45,7 +45,7 @@ export default function Reportes() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-black text-white uppercase tracking-wide">REPORTES</h2>
           <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>
@@ -64,7 +64,7 @@ export default function Reportes() {
       </div>
 
       {/* KPI cards */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-xl p-5" style={CARD_STYLE}>
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold" style={{ color: '#8b949e' }}>Ingresos Totales</p>
@@ -127,7 +127,7 @@ export default function Reportes() {
       </div>
 
       {/* Desglose */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Desglose de gastos */}
         <div className="rounded-xl p-5" style={CARD_STYLE}>
           <div className="flex items-center gap-2 mb-4">

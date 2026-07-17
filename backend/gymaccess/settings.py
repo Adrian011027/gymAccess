@@ -57,16 +57,25 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'gymaccess.wsgi.application'
 
+# --- SQLite: base de datos local para la demo/prototipo (sin servidor ni contraseñas) ---
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'gymaccess_db',
-        'USER': 'root',
-        'PASSWORD': 'Passw0rd1',
-        'HOST': 'localhost',
-        'PORT': '3306',
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+
+# --- MySQL: descomenta esto (y comenta el bloque de arriba) para usar MySQL en producción ---
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.mysql',
+#         'NAME': 'gymaccess_db',
+#         'USER': 'root',
+#         'PASSWORD': 'Passw0rd1',
+#         'HOST': 'localhost',
+#         'PORT': '3306',
+#     }
+# }
 
 AUTH_USER_MODEL = 'usuarios.Usuario'
 

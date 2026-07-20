@@ -3,6 +3,7 @@ from django.db.models import Count
 from django.db.models.functions import ExtractHour
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from .models import Acceso, MetodoAcceso
@@ -57,13 +58,17 @@ class AccesoViewSet(viewsets.ReadOnlyModelViewSet):
 
 class CheckInView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'checkin'
 
     def post(self, request):
         token = request.data.get('token')
         sucursal_id = request.data.get('sucursal_id')
 
         try:
-            metodo = MetodoAcceso.objects.select_related('socio').get(token=token, activo=True)
+            metodo = MetodoAcceso.objects.select_related('socio').get(
+                token=token, activo=True, socio__gym_id=request.user.gym_id,
+            )
         except MetodoAcceso.DoesNotExist:
             return Response({'error': 'Token inválido'}, status=status.HTTP_404_NOT_FOUND)
 

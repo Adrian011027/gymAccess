@@ -1,7 +1,20 @@
 from rest_framework import viewsets, permissions
+from rest_framework.throttling import ScopedRateThrottle
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .models import Usuario
 from .permissions import EsAdminGym
-from .serializers import UsuarioSerializer
+from .serializers import UsuarioSerializer, LoginSerializer
+
+
+class LoginView(TokenObtainPairView):
+    serializer_class = LoginSerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
+
+
+class RefreshView(TokenRefreshView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
 
 
 class UsuarioViewSet(viewsets.ModelViewSet):

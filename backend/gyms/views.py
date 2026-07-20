@@ -5,9 +5,14 @@ from .serializers import GymSerializer, SucursalSerializer, ClaseSerializer, Equ
 
 
 class GymViewSet(viewsets.ModelViewSet):
-    queryset = Gym.objects.filter(activo=True)
     serializer_class = GymSerializer
     permission_classes = [permissions.IsAuthenticated, AdminOSoloLectura]
+
+    def get_queryset(self):
+        qs = Gym.objects.filter(activo=True)
+        if self.request.user.rol == 'superadmin':
+            return qs
+        return qs.filter(id=self.request.user.gym_id)
 
 
 class SucursalViewSet(viewsets.ModelViewSet):
@@ -15,7 +20,10 @@ class SucursalViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, AdminOSoloLectura]
 
     def get_queryset(self):
-        return Sucursal.objects.filter(activa=True)
+        qs = Sucursal.objects.filter(activa=True)
+        if self.request.user.rol == 'superadmin':
+            return qs
+        return qs.filter(gym_id=self.request.user.gym_id)
 
 
 class ClaseViewSet(viewsets.ModelViewSet):

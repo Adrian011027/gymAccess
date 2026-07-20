@@ -79,6 +79,55 @@ class CheckInTests(BaseAPITestCase):
         self.assertEqual(acceso.metodo_usado, 'huella')
 
 
+class CheckInThrottleTests(BaseAPITestCase):
+    """El kiosco de check-in tiene su propio límite de tasa (60/min)."""
+
+    def test_checkin_flood_es_limitado(self):
+        from django.core.cache import cache
+        cache.clear()
+        for _ in range(60):
+            resp = self.client.post('/api/accesos/checkin/', {
+                'token': 'NOEXISTE', 'sucursal_id': self.sucursal.id,
+            })
+            self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        resp = self.client.post('/api/accesos/checkin/', {
+            'token': 'NOEXISTE', 'sucursal_id': self.sucursal.id,
+        })
+        self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+
+class CheckInMultitenantTests(BaseAPITestCase):
+    """Un QR/huella de un gym no debe funcionar en el kiosco de otro gym."""
+
+    def setUp(self):
+        super().setUp()
+        self.socio_ajeno = Socio.objects.create(gym=self.otro_gym, nombre='Pedro', apellido='Ajeno')
+        plan_ajeno = Plan.objects.create(gym=self.otro_gym, nombre='Mensual', tipo='mensual', precio=500)
+        from gyms.models import Sucursal
+        sucursal_ajena = Sucursal.objects.create(gym=self.otro_gym, nombre='Ajena')
+        Membresia.objects.create(
+            socio=self.socio_ajeno, plan=plan_ajeno, sucursal=sucursal_ajena,
+            fecha_inicio=date.today(), fecha_fin=date.today() + timedelta(days=30),
+            estado='activa',
+        )
+        MetodoAcceso.objects.create(socio=self.socio_ajeno, tipo='qr', token='TOKEN-AJENO')
+
+    def test_token_de_otro_gym_es_rechazado(self):
+        resp = self.client.post('/api/accesos/checkin/', {
+            'token': 'TOKEN-AJENO', 'sucursal_id': self.sucursal.id,
+        })
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(Acceso.objects.filter(socio=self.socio_ajeno).exists())
+
+    def test_accesos_de_otro_gym_ocultos(self):
+        Acceso.objects.create(
+            socio=self.socio_ajeno, sucursal=self.sucursal, resultado='permitido', metodo_usado='qr',
+        )
+        resp = self.client.get('/api/accesos/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp.data), 0)
+
+
 class MetodoAccesoTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()

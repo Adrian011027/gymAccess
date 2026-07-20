@@ -1,0 +1,40 @@
+### GymAccess — pruebas de login (VS Code REST Client)
+### Credenciales del seed: python manage.py seed_demo
+
+@baseUrl = http://localhost:8000
+
+### Login como ADMIN (dueño del gym)
+# @name loginAdmin
+POST {{baseUrl}}/api/auth/login/
+Content-Type: application/json
+
+{
+  "email": "diego@round3boxing.com",
+  "password": "Diego1234"
+}
+
+### Login como RECEPCIONISTA
+# @name loginRecepcion
+POST {{baseUrl}}/api/auth/login/
+Content-Type: application/json
+
+{
+  "email": "recepcion@round3boxing.com",
+  "password": "Recepcion123"
+}
+
+### Refrescar token (usa el refresh del login admin)
+POST {{baseUrl}}/api/auth/refresh/
+Content-Type: application/json
+
+{
+  "refresh": "{{loginAdmin.response.body.refresh}}"
+}
+
+### Ejemplo autenticado como admin — listar usuarios del gym
+GET {{baseUrl}}/api/usuarios/
+Authorization: Bearer {{loginAdmin.response.body.access}}
+
+### Ejemplo autenticado como recepcionista — listar socios
+GET {{baseUrl}}/api/socios/
+Authorization: Bearer {{loginRecepcion.response.body.access}}

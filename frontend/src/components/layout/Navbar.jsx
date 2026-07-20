@@ -1,6 +1,7 @@
 import { useLocation } from 'react-router-dom'
 
 const ROUTE_LABELS = {
+  '/checkin':      'Check-In',
   '/dashboard':    'Dashboard',
   '/socios':       'Socios',
   '/clases':       'Clases',

@@ -25,6 +25,7 @@ INSTALLED_APPS = [
     'gyms',
     'socios',
     'accesos',
+    'notificaciones',
 ]
 
 MIDDLEWARE = [

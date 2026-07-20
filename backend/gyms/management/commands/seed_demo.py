@@ -89,16 +89,26 @@ class Command(BaseCommand):
             gym=gym,
         )
 
-        # ---------------- Plan (uno solo por ahora) ----------------
-        plan = Plan.objects.create(
-            gym=gym,
-            nombre='Mensualidad Round3',
-            tipo='mensual',
-            precio=499.00,
-            duracion_dias=30,
-            activo=True,
-        )
-        self.stdout.write(self.style.SUCCESS(f'Plan creado: {plan.nombre} (${plan.precio})'))
+        # ---------------- Planes ----------------
+        planes_data = [
+            ('Regular', 'mensual', 499.00, 30),
+            ('Estudiante', 'mensual', 399.00, 30),
+            ('Pareja', 'mensual', 899.00, 30),
+            ('3 Meses', 'trimestral', 1349.00, 90),
+            ('Anual', 'anual', 4999.00, 365),
+        ]
+        planes = {}
+        for nombre, tipo, precio, dias in planes_data:
+            planes[nombre] = Plan.objects.create(
+                gym=gym,
+                nombre=nombre,
+                tipo=tipo,
+                precio=precio,
+                duracion_dias=dias,
+                activo=True,
+            )
+        plan = planes['Regular']
+        self.stdout.write(self.style.SUCCESS(f'{len(planes)} planes creados: {", ".join(planes)}'))
 
         # ---------------- Socios ----------------
         socios_data = [
@@ -120,6 +130,7 @@ class Command(BaseCommand):
         ]
 
         metodos_pago = ['efectivo', 'tarjeta', 'transferencia']
+        plan_ciclo = list(planes.values())
         socios = []
         for i, (nombre, apellido, sexo, email, tel, anio) in enumerate(socios_data):
             socio = Socio.objects.create(
@@ -133,6 +144,7 @@ class Command(BaseCommand):
                 activo=True,
             )
             socios.append(socio)
+            plan_socio = plan_ciclo[i % len(plan_ciclo)]
 
             # Método de acceso (QR) para cada socio
             MetodoAcceso.objects.create(
@@ -144,23 +156,24 @@ class Command(BaseCommand):
 
             # Definir estado de la membresía para variar el panel
             # La mayoría activas; algunas vencidas / pendientes
+            duracion = plan_socio.duracion_dias or 30
             if i % 7 == 5:
                 estado = 'vencida'
-                inicio = hoy - timedelta(days=45)
+                inicio = hoy - timedelta(days=duracion + 15)
                 fin = hoy - timedelta(days=15)
             elif i % 7 == 6:
                 estado = 'pendiente_pago'
                 inicio = hoy
-                fin = hoy + timedelta(days=30)
+                fin = hoy + timedelta(days=duracion)
             else:
                 estado = 'activa'
-                dias_transcurridos = random.randint(1, 25)
+                dias_transcurridos = random.randint(1, min(25, duracion - 1) if duracion > 1 else 1)
                 inicio = hoy - timedelta(days=dias_transcurridos)
-                fin = inicio + timedelta(days=30)
+                fin = inicio + timedelta(days=duracion)
 
             membresia = Membresia.objects.create(
                 socio=socio,
-                plan=plan,
+                plan=plan_socio,
                 sucursal=sucursal,
                 fecha_inicio=inicio,
                 fecha_fin=fin,
@@ -171,7 +184,7 @@ class Command(BaseCommand):
             if estado != 'pendiente_pago':
                 Pago.objects.create(
                     membresia=membresia,
-                    monto=plan.precio,
+                    monto=plan_socio.precio,
                     metodo=random.choice(metodos_pago),
                     referencia=f'PAGO-{membresia.id:05d}',
                     registrado_por=diego,

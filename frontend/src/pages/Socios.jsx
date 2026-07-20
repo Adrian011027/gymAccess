@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 const INPUT_STYLE = { backgroundColor: '#0d1117', border: '1px solid #21262d', color: '#fff' }
 
-const EMPTY = { nombre: '', apellido: '', email: '', telefono: '', sexo: '', fecha_nacimiento: '' }
+const EMPTY = { nombre: '', apellido: '', email: '', telefono: '', sexo: '', fecha_nacimiento: '', plan_id: '' }
 
 const AVATAR_COLORS = ['#f97316', '#a855f7', '#3b82f6', '#22c55e', '#ef4444', '#eab308', '#06b6d4']
 function avatarColor(name) { return AVATAR_COLORS[(name?.charCodeAt(0) || 0) % AVATAR_COLORS.length] }
@@ -40,6 +40,8 @@ function planBadge(nombre) {
 
 export default function Socios() {
   const [socios, setSocios] = useState([])
+  const [planes, setPlanes] = useState([])
+  const [sucursales, setSucursales] = useState([])
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState(EMPTY)
   const [search, setSearch] = useState('')
@@ -50,7 +52,11 @@ export default function Socios() {
   const [huellaMsg, setHuellaMsg] = useState('')
 
   const load = () => api.get('/socios/').then(r => setSocios(r.data)).catch(() => {})
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    api.get('/socios/planes/').then(r => setPlanes(r.data)).catch(() => {})
+    api.get('/gyms/sucursales/').then(r => setSucursales(r.data)).catch(() => {})
+  }, [])
 
   const abrirSincronizarHuella = socio => {
     setHuellaModal(socio)
@@ -86,11 +92,27 @@ export default function Socios() {
     e.preventDefault()
     setLoading(true)
     try {
+      const { plan_id, ...socioData } = form
       if (form.id) {
-        await api.patch(`/socios/${form.id}/`, form)
+        await api.patch(`/socios/${form.id}/`, socioData)
         toast.success('Socio actualizado')
       } else {
-        await api.post('/socios/', form)
+        const { data: socio } = await api.post('/socios/', socioData)
+        if (plan_id) {
+          const plan = planes.find(p => p.id === Number(plan_id))
+          const hoy = new Date().toISOString().slice(0, 10)
+          const fin = plan?.duracion_dias
+            ? new Date(Date.now() + plan.duracion_dias * 86400000).toISOString().slice(0, 10)
+            : null
+          await api.post('/socios/membresias/', {
+            socio: socio.id,
+            plan: plan_id,
+            sucursal: sucursales[0]?.id,
+            fecha_inicio: hoy,
+            fecha_fin: fin,
+            estado: 'activa',
+          })
+        }
         toast.success('Socio registrado')
       }
       setModal(false)
@@ -287,6 +309,17 @@ export default function Socios() {
                   <input type="date" value={form.fecha_nacimiento || ''} onChange={e => setForm(f => ({ ...f, fecha_nacimiento: e.target.value }))} className={inputCls} style={INPUT_STYLE} />
                 </div>
               </div>
+              {!form.id && (
+                <div>
+                  <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>PLAN</label>
+                  <select value={form.plan_id} onChange={e => setForm(f => ({ ...f, plan_id: e.target.value }))} className={inputCls} style={INPUT_STYLE}>
+                    <option value="">Sin plan</option>
+                    {planes.map(p => (
+                      <option key={p.id} value={p.id}>{p.nombre} — ${p.precio}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setModal(false)}
                   className="flex-1 py-2.5 rounded-lg text-xs font-semibold transition-colors"

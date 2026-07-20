@@ -11,6 +11,7 @@ import Equipamiento from './pages/Equipamiento'
 import Reportes from './pages/Reportes'
 import Pagos from './pages/Pagos'
 import Configuracion from './pages/Configuracion'
+import Notificaciones from './pages/Notificaciones'
 
 // El admin aterriza en el dashboard; recepción va directo al check-in.
 function HomeRedirect() {
@@ -43,6 +44,7 @@ export default function App() {
             <Route path="/socios"       element={<Socios />} />
             <Route path="/clases"       element={<Clases />} />
             <Route path="/pagos"        element={<Pagos />} />
+            <Route path="/notificaciones" element={<Notificaciones />} />
             <Route element={<AdminRoutes />}>
               <Route path="/dashboard"    element={<Dashboard />} />
               <Route path="/equipamiento" element={<Equipamiento />} />

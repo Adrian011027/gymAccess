@@ -31,6 +31,7 @@ class SocioSerializer(serializers.ModelSerializer):
 class MembresiaSerializer(serializers.ModelSerializer):
     socio_nombre = serializers.CharField(source='socio.__str__', read_only=True)
     plan_nombre = serializers.CharField(source='plan.nombre', read_only=True)
+    plan_precio = serializers.DecimalField(source='plan.precio', read_only=True, max_digits=10, decimal_places=2)
 
     class Meta:
         model = Membresia
@@ -38,6 +39,10 @@ class MembresiaSerializer(serializers.ModelSerializer):
 
 
 class PagoSerializer(serializers.ModelSerializer):
+    socio_nombre = serializers.CharField(source='membresia.socio.__str__', read_only=True)
+    plan_nombre = serializers.CharField(source='membresia.plan.nombre', read_only=True)
+    registrado_por_nombre = serializers.CharField(source='registrado_por.nombre', read_only=True)
+
     class Meta:
         model = Pago
         fields = '__all__'

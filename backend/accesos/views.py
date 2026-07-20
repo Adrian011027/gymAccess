@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 from .models import Acceso, MetodoAcceso
 from .serializers import AccesoSerializer, MetodoAccesoSerializer
 from socios.models import Membresia, Socio
+from notificaciones.models import Notificacion
 
 
 class MetodoAccesoViewSet(viewsets.ModelViewSet):
@@ -84,13 +85,22 @@ class CheckInView(APIView):
         ).first()
 
         if not membresia:
+            tiene_historial = Membresia.objects.filter(socio=socio).exists()
+            motivo = 'membresia_vencida' if tiene_historial else 'sin_membresia'
             Acceso.objects.create(
                 socio=socio,
                 sucursal_id=sucursal_id,
                 metodo_usado=metodo.tipo,
                 resultado='denegado',
-                motivo_denegado='sin_membresia' if not Membresia.objects.filter(socio=socio).exists() else 'membresia_vencida',
+                motivo_denegado=motivo,
             )
+            if motivo == 'membresia_vencida' and socio.gym_id:
+                Notificacion.objects.create(
+                    gym_id=socio.gym_id,
+                    tipo='pago_vencido',
+                    mensaje=f'{socio.nombre} {socio.apellido} intentó ingresar con la membresía vencida',
+                    link='/pagos?tab=atrasados',
+                )
             return Response({
                 'acceso': 'denegado',
                 'socio': f'{socio.nombre} {socio.apellido}',

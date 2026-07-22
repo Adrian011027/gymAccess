@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     // Permite cualquier subdominio de ngrok (la URL gratis cambia en cada arranque).
-    allowedHosts: ['.ngrok-free.app'],
+    allowedHosts: ['.ngrok-free.app', '.loca.lt'],
     proxy: {
       '/api': 'http://localhost:8000',
     },

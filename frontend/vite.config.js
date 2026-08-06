@@ -8,7 +8,7 @@ export default defineConfig({
     // Permite cualquier subdominio de ngrok (la URL gratis cambia en cada arranque).
     allowedHosts: ['.ngrok-free.app', '.loca.lt'],
     proxy: {
-      '/api': 'http://localhost:8000',
+      '/api': 'http://127.0.0.1:8001',
     },
   },
 })

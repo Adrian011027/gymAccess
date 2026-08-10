@@ -1,4 +1,3 @@
-from django.db import models
 from django.db.models import Count
 from django.db.models.functions import ExtractHour
 from django.utils import timezone
@@ -8,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from .models import Acceso, MetodoAcceso
 from .serializers import AccesoSerializer, MetodoAccesoSerializer
+from gyms.models import Sucursal
 from socios.models import Membresia, Socio
 from notificaciones.models import Notificacion
 
@@ -73,23 +73,32 @@ class CheckInView(APIView):
         except MetodoAcceso.DoesNotExist:
             return Response({'error': 'Token inválido'}, status=status.HTTP_404_NOT_FOUND)
 
-        socio = metodo.socio
-        hoy = timezone.localdate()
+        # La sucursal viene del cliente: hay que comprobar que exista y que sea de este
+        # gym antes de registrar nada. Sin esta validación el acceso se guardaba contra
+        # la sucursal de otro negocio, y si faltaba el dato el INSERT reventaba con 500.
+        if sucursal_id in (None, ''):
+            return Response(
+                {'sucursal_id': 'Indica la sucursal donde se registra el acceso.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            sucursal = Sucursal.objects.get(id=sucursal_id, gym_id=request.user.gym_id)
+        except (Sucursal.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {'sucursal_id': 'Sucursal no encontrada.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        membresia = Membresia.objects.filter(
-            socio=socio,
-            estado='activa',
-            fecha_inicio__lte=hoy,
-        ).filter(
-            models.Q(fecha_fin__gte=hoy) | models.Q(fecha_fin__isnull=True)
-        ).first()
+        socio = metodo.socio
+
+        membresia = Membresia.objects.vigentes().filter(socio=socio).first()
 
         if not membresia:
             tiene_historial = Membresia.objects.filter(socio=socio).exists()
             motivo = 'membresia_vencida' if tiene_historial else 'sin_membresia'
             Acceso.objects.create(
                 socio=socio,
-                sucursal_id=sucursal_id,
+                sucursal=sucursal,
                 metodo_usado=metodo.tipo,
                 resultado='denegado',
                 motivo_denegado=motivo,
@@ -109,7 +118,7 @@ class CheckInView(APIView):
 
         Acceso.objects.create(
             socio=socio,
-            sucursal_id=sucursal_id,
+            sucursal=sucursal,
             membresia=membresia,
             metodo_usado=metodo.tipo,
             resultado='permitido',

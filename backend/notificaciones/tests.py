@@ -1,11 +1,9 @@
 """Módulo de notificaciones: campanita, historial, archivado y retención a 15 días."""
 
-import unittest
 from datetime import timedelta
 from io import StringIO
 
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import status
 
@@ -257,15 +255,13 @@ class NotificacionGeneradasPorElSistemaTests(NotificacionBase):
         self.assertEqual(Notificacion.objects.filter(gym=self.gym).count(), 1)
 
     def test_cliente_no_puede_inyectar_notificaciones(self):
-        """gym/tipo/mensaje son read_only: un POST no puede fabricar avisos falsos."""
-        with transaction.atomic():
-            with self.assertRaises(IntegrityError):
-                self.client.post('/api/notificaciones/', {
-                    'gym': self.otro_gym.id, 'tipo': 'pago_vencido', 'mensaje': 'Falso',
-                })
+        """El alta está cerrada: un POST no puede fabricar avisos falsos."""
+        resp = self.client.post('/api/notificaciones/', {
+            'gym': self.otro_gym.id, 'tipo': 'pago_vencido', 'mensaje': 'Falso',
+        })
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         self.assertFalse(Notificacion.objects.filter(mensaje='Falso').exists())
 
-    @unittest.expectedFailure
     def test_BUG_post_a_notificaciones_revienta_en_vez_de_devolver_400(self):
         """BUG (menor, robustez): NotificacionViewSet acepta POST (views.py:16) pero
         el serializer marca gym/tipo/mensaje como read_only (serializers.py:9).

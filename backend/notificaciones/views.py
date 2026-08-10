@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework import viewsets, permissions
 from rest_framework.decorators import action
+from rest_framework.exceptions import MethodNotAllowed
 from rest_framework.response import Response
 from .models import Notificacion
 from .serializers import NotificacionSerializer
@@ -14,6 +15,16 @@ class NotificacionViewSet(viewsets.ModelViewSet):
     serializer_class = NotificacionSerializer
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get', 'patch', 'post', 'head', 'options']
+
+    def create(self, request, *args, **kwargs):
+        """Las notificaciones sólo las genera el backend.
+
+        No se quita 'post' de http_method_names porque las acciones
+        marcar-todas-leidas y limpiar también son POST y se romperían; se cierra
+        únicamente el alta. Antes el POST pasaba la validación con todo read_only
+        y moría en el INSERT con un 500.
+        """
+        raise MethodNotAllowed('POST')
 
     def _limite_retencion(self):
         return timezone.now() - timedelta(days=RETENCION_DIAS)

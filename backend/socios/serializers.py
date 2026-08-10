@@ -22,7 +22,10 @@ class SocioSerializer(serializers.ModelSerializer):
         return m.token if m else None
 
     def get_membresia_activa(self, obj):
-        m = obj.membresias.filter(estado='activa').first()
+        # Misma definición de "vigente" que usa el check-in (Membresia.objects.vigentes).
+        # No basta con estado='activa': nada mueve el estado a 'vencida' cuando pasa
+        # fecha_fin, así que hay que comparar fechas aquí también.
+        m = obj.membresias.vigentes().first()
         if not m:
             return None
         return {'id': m.id, 'plan': m.plan.nombre, 'fecha_fin': m.fecha_fin, 'estado': m.estado}

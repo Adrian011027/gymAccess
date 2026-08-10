@@ -2,7 +2,6 @@
 y los feeds de pagos/gastos que el frontend agrega para las gráficas.
 """
 
-import unittest
 import zoneinfo
 from datetime import datetime, date, timedelta
 
@@ -198,7 +197,6 @@ class CheckInEntradasMalformadasTests(StatsBase):
         })
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
-    @unittest.expectedFailure
     def test_BUG_checkin_acepta_sucursal_de_otro_gym(self):
         """BUG: CheckInView confía en el `sucursal_id` que manda el cliente sin
         comprobar que pertenezca al gym del usuario (accesos/views.py:67, 110-116).
@@ -215,7 +213,6 @@ class CheckInEntradasMalformadasTests(StatsBase):
         })
         self.assertFalse(Acceso.objects.filter(sucursal=sucursal_ajena).exists())
 
-    @unittest.expectedFailure
     def test_BUG_checkin_sin_sucursal_revienta_en_vez_de_devolver_400(self):
         """BUG (menor, robustez): CheckInView crea el Acceso con
         `sucursal_id=request.data.get('sucursal_id')` sin validarlo

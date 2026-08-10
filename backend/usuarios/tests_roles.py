@@ -2,10 +2,8 @@
 endpoint, más el comportamiento de sesión: token, usuario desactivado y datos del JWT.
 """
 
-import unittest
 from datetime import date, timedelta
 
-from django.db import IntegrityError, transaction
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -326,13 +324,11 @@ class UsuarioSinGymTests(BaseAPITestCase):
         self.assertEqual(resp.data['accesos_hoy'], 0)
 
     def test_superadmin_no_puede_crear_socios_huerfanos(self):
-        """La rama sin gym de SocioViewSet.perform_create no llega a la base."""
-        with transaction.atomic():
-            with self.assertRaises(IntegrityError):
-                self.client.post('/api/socios/', {'nombre': 'Huerfano', 'apellido': 'Test'})
+        """Un superadmin sin gym no puede dejar socios sin gym en la base."""
+        resp = self.client.post('/api/socios/', {'nombre': 'Huerfano', 'apellido': 'Test'})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(Socio.objects.filter(nombre='Huerfano').exists())
 
-    @unittest.expectedFailure
     def test_BUG_alta_de_socio_sin_gym_revienta_en_vez_de_devolver_400(self):
         """BUG (menor, robustez): SocioViewSet.perform_create (socios/views.py:33-37)
         tiene una rama `else: serializer.save()` para usuarios sin gym, pero

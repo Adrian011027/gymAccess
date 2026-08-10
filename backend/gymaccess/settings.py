@@ -1,13 +1,24 @@
+import os
 from pathlib import Path
 from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-3-8#is1+(bm1kgw(axuj5d$g^#(_d&otj9w+au7n)zxv72csjm'
 
-DEBUG = True
+def _env_bool(nombre, por_defecto):
+    return os.environ.get(nombre, str(por_defecto)).lower() in ('1', 'true', 'yes', 'on')
 
-ALLOWED_HOSTS = ['*']
+
+# En desarrollo se mantiene el valor de siempre; en el servidor hay que exportar
+# DJANGO_SECRET_KEY, DJANGO_DEBUG=0 y DJANGO_ALLOWED_HOSTS con el dominio real.
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-3-8#is1+(bm1kgw(axuj5d$g^#(_d&otj9w+au7n)zxv72csjm',
+)
+
+DEBUG = _env_bool('DJANGO_DEBUG', True)
+
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',') if h.strip()]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -105,7 +116,14 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
 }
 
-CORS_ALLOW_ALL_ORIGINS = True
+# Abierto en desarrollo; en producción se listan los orígenes reales en
+# DJANGO_CORS_ORIGINS (separados por coma) y deja de aceptar cualquiera.
+_cors_origins = [o.strip() for o in os.environ.get('DJANGO_CORS_ORIGINS', '').split(',') if o.strip()]
+if _cors_origins:
+    CORS_ALLOWED_ORIGINS = _cors_origins
+    CORS_ALLOW_ALL_ORIGINS = False
+else:
+    CORS_ALLOW_ALL_ORIGINS = True
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},

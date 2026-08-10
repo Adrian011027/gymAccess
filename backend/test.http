@@ -1,7 +1,10 @@
 ### GymAccess — pruebas de login (VS Code REST Client)
-### Credenciales del seed: python manage.py seed_demo
+### Credenciales del seed de DESARROLLO: python manage.py seed_demo
+### No usar estas cuentas en un servidor real: si la base del seed llega a produccion,
+### hay que cambiar ambos passwords antes de exponer el sistema.
+### Puerto 8001: el 8000 lo ocupa otro proyecto en Docker.
 
-@baseUrl = http://localhost:8000
+@baseUrl = http://127.0.0.1:8001
 
 ### Login como ADMIN (dueño del gym)
 # @name loginAdmin

@@ -5,7 +5,6 @@ pendiente de pago, o activa pero con fecha_fin ya pasada) se muestra correctamen
 en el apartado de Socios y se comporta igual en el kiosco de acceso?
 """
 
-import unittest
 from datetime import date, timedelta
 
 from rest_framework import status
@@ -144,7 +143,6 @@ class MembresiaActivaCampoTests(MembresiaBase):
         socio, _ = self.crear_socio('VenceHoy', estado='activa', fecha_fin=HOY())
         self.assertIsNotNone(self.socio_en_lista(socio)['membresia_activa'])
 
-    @unittest.expectedFailure
     def test_BUG_activa_con_fecha_vencida_no_deberia_exponerse(self):
         """BUG: SocioSerializer.get_membresia_activa filtra solo por estado='activa'
         y nunca compara fecha_fin contra hoy (socios/serializers.py:25).
@@ -161,7 +159,6 @@ class MembresiaActivaCampoTests(MembresiaBase):
                                     fecha_fin=HOY() - timedelta(days=1))
         self.assertIsNone(self.socio_en_lista(socio)['membresia_activa'])
 
-    @unittest.expectedFailure
     def test_BUG_activa_con_fecha_futura_no_deberia_exponerse(self):
         """BUG (misma causa): una membresía que arranca la próxima semana ya se
         publica como activa. El check-in la rechaza por fecha_inicio__lte=hoy."""
@@ -217,7 +214,6 @@ class ConsistenciaSociosVsCheckInTests(MembresiaBase):
         self.assertFalse(self._veredicto_lista(socio))
         self.assertFalse(self._veredicto_checkin('QR-NADIE'))
 
-    @unittest.expectedFailure
     def test_BUG_activa_expirada_diverge(self):
         """BUG: mismo caso del serializer. La lista dice que sí, la puerta dice que no."""
         socio, _ = self.crear_socio('Diverge', estado='activa',
@@ -361,7 +357,6 @@ class MembresiaEndpointTests(MembresiaBase):
         resp = self.client.get(f'/api/socios/membresias/{m.id}/')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
-    @unittest.expectedFailure
     def test_BUG_no_deberia_poder_crear_membresia_para_socio_de_otro_gym(self):
         """BUG: MembresiaViewSet (socios/views.py:46-51) filtra el queryset de lectura
         por gym pero no valida nada en la escritura: no hay perform_create ni

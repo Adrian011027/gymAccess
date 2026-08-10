@@ -57,7 +57,9 @@ export default function Pagos() {
   const pendientes = membresias.filter(m => m.estado !== 'activa' || m.fecha_fin <= semana)
   const pendHoy    = pendientes.filter(m => m.fecha_fin === hoy || m.estado === 'pendiente_pago')
   const pendSem    = pendientes.filter(m => m.fecha_fin > hoy && m.fecha_fin <= semana)
-  const atrasados  = membresias.filter(m => m.fecha_fin < hoy && m.estado !== 'activa')
+  // Si la fecha ya pasó la membresía está atrasada, sin importar el estado guardado:
+  // una que quedó marcada 'activa' con fecha vencida es justo la que hay que cobrar.
+  const atrasados  = membresias.filter(m => m.fecha_fin && m.fecha_fin < hoy)
 
   const abrirConfirmacion = mem => {
     setConfirmar(mem)

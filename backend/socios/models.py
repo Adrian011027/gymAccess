@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 from gyms.models import Gym, Sucursal
 
 
@@ -48,6 +49,29 @@ class Socio(models.Model):
         return f'{self.nombre} {self.apellido}'
 
 
+class MembresiaQuerySet(models.QuerySet):
+    def vigentes(self, hoy=None):
+        """Membresías que hoy dan derecho a entrar.
+
+        Definición única de "vigente" para todo el sistema: la usan el serializer de
+        Socios y el check-in del kiosco. Mientras vivan en un solo lugar no pueden
+        volver a divergir (una pantalla diciendo que el socio está al corriente
+        mientras la puerta lo rechaza).
+        """
+        hoy = hoy or timezone.localdate()
+        return self.filter(
+            estado='activa',
+            fecha_inicio__lte=hoy,
+        ).filter(
+            models.Q(fecha_fin__gte=hoy) | models.Q(fecha_fin__isnull=True)
+        )
+
+    def caducadas(self, hoy=None):
+        """Marcadas como activas pero con la fecha ya pasada."""
+        hoy = hoy or timezone.localdate()
+        return self.filter(estado='activa', fecha_fin__lt=hoy)
+
+
 class Membresia(models.Model):
     ESTADO_CHOICES = [
         ('activa', 'Activa'),
@@ -55,6 +79,8 @@ class Membresia(models.Model):
         ('suspendida', 'Suspendida'),
         ('pendiente_pago', 'Pendiente de Pago'),
     ]
+
+    objects = MembresiaQuerySet.as_manager()
 
     socio = models.ForeignKey(Socio, on_delete=models.CASCADE, related_name='membresias')
     plan = models.ForeignKey(Plan, on_delete=models.PROTECT, related_name='membresias')

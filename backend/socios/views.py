@@ -31,10 +31,17 @@ class SocioViewSet(viewsets.ModelViewSet):
         ).prefetch_related('metodos_acceso')
 
     def perform_create(self, serializer):
-        if self.request.user.gym_id:
-            socio = serializer.save(gym_id=self.request.user.gym_id)
-        else:
-            socio = serializer.save()
+        gym_id = self.request.user.gym_id
+        if not gym_id:
+            # Un superadmin sin gym debe decir explícitamente en qué gym da de alta;
+            # Socio.gym es NOT NULL, así que guardar sin gym revienta en el INSERT.
+            gym = serializer.validated_data.get('gym')
+            if not gym:
+                raise ValidationError(
+                    {'gym': 'El usuario no tiene gym asignado: indica el gym del socio.'}
+                )
+            gym_id = gym.id
+        socio = serializer.save(gym_id=gym_id)
         # Cada socio nuevo recibe su código de acceso automáticamente
         MetodoAcceso.objects.create(
             socio=socio,
@@ -49,6 +56,32 @@ class MembresiaViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Membresia.objects.filter(socio__gym_id=self.request.user.gym_id).select_related('socio', 'plan')
+
+    def _validar_pertenencia(self, serializer):
+        """El queryset de lectura ya filtra por gym, pero la escritura no validaba nada:
+        un POST con socio/plan/sucursal de otro negocio se guardaba con 201 y quedaba
+        invisible para quien lo creó. Mismo patrón que PagoViewSet.perform_create.
+        """
+        gym_id = self.request.user.gym_id
+        errores = {}
+        for campo, mensaje in (
+            ('socio', 'Socio no encontrado'),
+            ('plan', 'Plan no encontrado'),
+            ('sucursal', 'Sucursal no encontrada'),
+        ):
+            obj = serializer.validated_data.get(campo)
+            if obj is not None and obj.gym_id != gym_id:
+                errores[campo] = mensaje
+        if errores:
+            raise ValidationError(errores)
+
+    def perform_create(self, serializer):
+        self._validar_pertenencia(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validar_pertenencia(serializer)
+        serializer.save()
 
 
 class PagoViewSet(viewsets.ModelViewSet):

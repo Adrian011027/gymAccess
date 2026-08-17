@@ -1,11 +1,9 @@
 import random
-from datetime import timedelta
 
-from django.utils import timezone
 from rest_framework import viewsets, permissions
 from rest_framework.exceptions import ValidationError
 from accesos.models import MetodoAcceso
-from usuarios.permissions import AdminOSoloLectura, EsAdminGym
+from usuarios.permissions import AdminOSoloLectura, EsAdminGym, PuedeCobrar
 from .models import Plan, Socio, Membresia, Pago, Gasto
 from .serializers import (
     PlanSerializer, SocioSerializer, MembresiaSerializer,
@@ -86,7 +84,7 @@ class MembresiaViewSet(viewsets.ModelViewSet):
 
 class PagoViewSet(viewsets.ModelViewSet):
     serializer_class = PagoSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, PuedeCobrar]
 
     def get_queryset(self):
         return Pago.objects.filter(membresia__socio__gym_id=self.request.user.gym_id)
@@ -97,16 +95,8 @@ class PagoViewSet(viewsets.ModelViewSet):
             raise ValidationError({'membresia': 'Membresía no encontrada'})
 
         pago = serializer.save(registrado_por=self.request.user)
-
-        # El pago reactiva la membresía y recorre el período según el plan
-        plan = membresia.plan
-        hoy = timezone.localdate()
-        membresia.fecha_inicio = hoy
-        membresia.fecha_fin = hoy + timedelta(days=plan.duracion_dias) if plan.duracion_dias else None
-        if plan.num_clases:
-            membresia.clases_restantes = plan.num_clases
-        membresia.estado = 'activa'
-        membresia.save()
+        # La fecha de corte del socio es fija; toda la lógica vive en Membresia.renovar.
+        membresia.renovar()
         return pago
 
 

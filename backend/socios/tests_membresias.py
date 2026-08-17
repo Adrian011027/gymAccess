@@ -12,7 +12,9 @@ from rest_framework import status
 from accesos.models import Acceso, MetodoAcceso
 from gyms.models import Sucursal
 from gyms.tests import BaseAPITestCase
-from socios.models import Plan, Socio, Membresia, Pago
+from socios.models import (
+    DIAS_GRACIA_REINSCRIPCION, Plan, Socio, Membresia, Pago, sumar_meses,
+)
 
 HOY = date.today
 
@@ -265,12 +267,22 @@ class CheckInPorEstadoTests(MembresiaBase):
         self.crear_socio('Libre', estado='activa', fecha_fin=False)
         self.assertEqual(self._checkin('QR-LIBRE').status_code, status.HTTP_200_OK)
 
-    def test_socio_dado_de_baja_con_membresia_activa_entra(self):
-        """Documenta el comportamiento actual: el check-in no mira Socio.activo,
-        solo la membresía. Dar de baja a un socio no le cierra la puerta."""
+    def test_socio_dado_de_baja_no_entra_aunque_tenga_membresia_vigente(self):
+        """Marcar 'inactivo' es la forma de vetar a alguien de inmediato: le cierra la
+        puerta aunque le queden días pagados."""
         self.crear_socio('Baja', estado='activa', activo=False,
                          fecha_fin=HOY() + timedelta(days=30))
-        self.assertEqual(self._checkin('QR-BAJA').status_code, status.HTTP_200_OK)
+        resp = self._checkin('QR-BAJA')
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.data['motivo'], 'socio suspendido')
+
+    def test_baja_queda_registrada_como_suspendido(self):
+        socio, _ = self.crear_socio('Vetado', estado='activa', activo=False,
+                                    fecha_fin=HOY() + timedelta(days=30))
+        self._checkin('QR-VETADO')
+        acceso = Acceso.objects.filter(socio=socio).first()
+        self.assertEqual(acceso.resultado, 'denegado')
+        self.assertEqual(acceso.motivo_denegado, 'suspendido')
 
     def test_vencida_genera_notificacion_de_cobranza(self):
         from notificaciones.models import Notificacion
@@ -394,17 +406,19 @@ class PagoReactivaMembresiaTests(MembresiaBase):
     """Registrar un pago debe reactivar y recorrer el período (socios/views.py:61-77)."""
 
     def test_pago_reactiva_membresia_vencida(self):
+        """Vencida ayer: está dentro de la gracia, así que conserva su día de corte y el
+        período nuevo arranca donde terminó el anterior, no en hoy."""
+        vencio = HOY() - timedelta(days=1)
         socio, membresia = self.crear_socio('Moroso', estado='vencida',
-                                            fecha_inicio=HOY() - timedelta(days=60),
-                                            fecha_fin=HOY() - timedelta(days=1))
+                                            fecha_inicio=HOY() - timedelta(days=31),
+                                            fecha_fin=vencio)
         resp = self.client.post('/api/socios/pagos/', {
             'membresia': membresia.id, 'monto': '500.00', 'metodo': 'efectivo',
         })
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         membresia.refresh_from_db()
         self.assertEqual(membresia.estado, 'activa')
-        self.assertEqual(membresia.fecha_inicio, HOY())
-        self.assertEqual(membresia.fecha_fin, HOY() + timedelta(days=30))
+        self.assertEqual(membresia.fecha_fin, sumar_meses(vencio, 1))
 
     def test_pago_reactiva_pendiente_de_pago(self):
         _, membresia = self.crear_socio('Debe', estado='pendiente_pago',
@@ -504,3 +518,139 @@ class PagoReactivaMembresiaTests(MembresiaBase):
         })
         pago = Pago.objects.get(id=resp.data['id'])
         self.assertEqual(pago.registrado_por, self.user)
+
+
+class SumarMesesTests(BaseAPITestCase):
+    """Aritmética de meses: el ancla es el día original, no el recortado."""
+
+    def test_mes_normal(self):
+        self.assertEqual(sumar_meses(date(2026, 3, 24), 1), date(2026, 4, 24))
+
+    def test_cambio_de_anio(self):
+        self.assertEqual(sumar_meses(date(2026, 12, 24), 1), date(2027, 1, 24))
+
+    def test_dia_31_en_mes_de_30_se_recorta(self):
+        self.assertEqual(sumar_meses(date(2026, 1, 31), 3), date(2026, 4, 30))
+
+    def test_dia_31_en_febrero_se_recorta(self):
+        self.assertEqual(sumar_meses(date(2026, 1, 31), 1), date(2026, 2, 28))
+
+    def test_febrero_bisiesto(self):
+        self.assertEqual(sumar_meses(date(2028, 1, 31), 1), date(2028, 2, 29))
+
+    def test_trimestre_semestre_y_anio(self):
+        self.assertEqual(sumar_meses(date(2026, 3, 24), 3), date(2026, 6, 24))
+        self.assertEqual(sumar_meses(date(2026, 3, 24), 6), date(2026, 9, 24))
+        self.assertEqual(sumar_meses(date(2026, 3, 24), 12), date(2027, 3, 24))
+
+
+class FechaFijaDeCobroTests(MembresiaBase):
+    """La fecha de cobro es fija por socio: quien se inscribió un 24 paga los 24.
+
+    Adelantar el pago no le quita días. Es la regla que el dueño pidió explícitamente,
+    y la que el código hacía al revés (fecha_fin = hoy + duración).
+    """
+
+    def _pagar(self, membresia):
+        resp = self.client.post('/api/socios/pagos/', {
+            'membresia': membresia.id, 'monto': '500.00', 'metodo': 'efectivo',
+        })
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        membresia.refresh_from_db()
+        return membresia
+
+    def _checkin(self, token):
+        return self.client.post('/api/accesos/checkin/', {
+            'token': token, 'sucursal_id': self.sucursal.id,
+        })
+
+    def test_pagar_antes_del_corte_no_mueve_la_fecha(self):
+        """El caso que motivó la regla: paga el 19, su corte sigue siendo el 24."""
+        corte = HOY() + timedelta(days=5)
+        _, membresia = self.crear_socio('Puntual', estado='activa', fecha_fin=corte)
+        self._pagar(membresia)
+        self.assertEqual(membresia.fecha_fin, sumar_meses(corte, 1))
+
+    def test_pagar_el_dia_del_corte_conserva_el_ancla(self):
+        _, membresia = self.crear_socio('Justo', estado='activa', fecha_fin=HOY())
+        self._pagar(membresia)
+        self.assertEqual(membresia.fecha_fin, sumar_meses(HOY(), 1))
+
+    def test_pagar_dentro_de_la_gracia_conserva_el_ancla(self):
+        corte = HOY() - timedelta(days=DIAS_GRACIA_REINSCRIPCION - 1)
+        _, membresia = self.crear_socio('Tarde', estado='vencida', fecha_fin=corte)
+        self._pagar(membresia)
+        self.assertEqual(membresia.fecha_fin, sumar_meses(corte, 1))
+
+    def test_pasada_la_gracia_se_reinscribe_con_ancla_nueva(self):
+        """Moroso de meses: no se le arrastran los meses que no vino, su corte se
+        mueve al día en que volvió."""
+        corte = HOY() - timedelta(days=DIAS_GRACIA_REINSCRIPCION + 1)
+        _, membresia = self.crear_socio('Moroso', estado='vencida', fecha_fin=corte)
+        self._pagar(membresia)
+        self.assertEqual(membresia.fecha_inicio, HOY())
+        self.assertEqual(membresia.fecha_fin, sumar_meses(HOY(), 1))
+
+    def test_reinscrito_puede_entrar_de_inmediato(self):
+        corte = HOY() - timedelta(days=90)
+        socio, membresia = self.crear_socio('Volvio', estado='vencida', fecha_fin=corte)
+        self.assertEqual(self._checkin('QR-VOLVIO').status_code, status.HTTP_403_FORBIDDEN)
+        self._pagar(membresia)
+        self.assertEqual(self._checkin('QR-VOLVIO').status_code, status.HTTP_200_OK)
+
+    def test_doce_pagos_puntuales_conservan_el_dia_de_corte(self):
+        """La prueba de fuego del ancla: un año pagando y el día no se corre."""
+        inicio = date(2026, 1, 31)
+        _, membresia = self.crear_socio('Anual', estado='activa', fecha_fin=inicio)
+        esperado = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        fecha = inicio
+        for mes in esperado:
+            fecha = sumar_meses(fecha, 1)
+            self.assertEqual(fecha.month, mes)
+        # Enero 31 → feb 28 → mar 31: el recorte de febrero no se arrastra
+        self.assertEqual(sumar_meses(date(2026, 2, 28), 1), date(2026, 3, 28))
+        self.assertEqual(sumar_meses(inicio, 2), date(2026, 3, 31))
+
+    def test_plan_trimestral_avanza_tres_meses(self):
+        self.plan.tipo = 'trimestral'
+        self.plan.save()
+        corte = HOY() + timedelta(days=2)
+        _, membresia = self.crear_socio('Trimestre', estado='activa', fecha_fin=corte)
+        self._pagar(membresia)
+        self.assertEqual(membresia.fecha_fin, sumar_meses(corte, 3))
+
+    def test_plan_de_visita_usa_dias_no_meses(self):
+        self.plan.tipo = 'visita'
+        self.plan.duracion_dias = 1
+        self.plan.save()
+        _, membresia = self.crear_socio('Visita', estado='vencida', fecha_fin=HOY())
+        self._pagar(membresia)
+        self.assertEqual(membresia.fecha_fin, HOY() + timedelta(days=1))
+
+    def test_membresia_sin_fecha_fin_se_ancla_a_hoy(self):
+        _, membresia = self.crear_socio('Libre', estado='activa', fecha_fin=False)
+        self._pagar(membresia)
+        self.assertEqual(membresia.fecha_inicio, HOY())
+        self.assertEqual(membresia.fecha_fin, sumar_meses(HOY(), 1))
+
+    def test_plan_de_clases_resetea_el_contador(self):
+        self.plan.tipo = 'clases'
+        self.plan.num_clases = 10
+        self.plan.duracion_dias = 60
+        self.plan.save()
+        _, membresia = self.crear_socio('Paquete', estado='vencida', fecha_fin=HOY())
+        membresia.clases_restantes = 0
+        membresia.save()
+        self._pagar(membresia)
+        self.assertEqual(membresia.clases_restantes, 10)
+
+    def test_el_admin_puede_corregir_la_fecha_a_mano(self):
+        """Único caso en que el corte se mueve sin pagar: edición explícita."""
+        nueva = HOY() + timedelta(days=45)
+        _, membresia = self.crear_socio('Ajuste', estado='activa',
+                                        fecha_fin=HOY() + timedelta(days=10))
+        resp = self.client.patch(f'/api/socios/membresias/{membresia.id}/',
+                                 {'fecha_fin': nueva.isoformat()})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        membresia.refresh_from_db()
+        self.assertEqual(membresia.fecha_fin, nueva)

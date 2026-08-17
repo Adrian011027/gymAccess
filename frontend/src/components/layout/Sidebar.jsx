@@ -27,7 +27,7 @@ const links = [
     icon: <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" /></svg>
   },
   {
-    to: '/pagos', label: 'Pagos',
+    to: '/pagos', label: 'Pagos', soloCaja: true,
     icon: <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
   },
   {
@@ -41,9 +41,12 @@ function getInitials(name = '') {
 }
 
 export default function Sidebar({ colapsado, setColapsado, mobileOpen, setMobileOpen }) {
-  const { user, isAdmin, logout } = useAuth()
+  const { user, isAdmin, puedeCobrar, logout } = useAuth()
   const userName = user?.nombre || user?.username || 'Usuario'
-  const visibleLinks = links.filter(link => !link.adminOnly || isAdmin)
+  // El menú nunca muestra un link al que este rol no puede entrar.
+  const visibleLinks = links.filter(link => (
+    (!link.adminOnly || isAdmin) && (!link.soloCaja || puedeCobrar)
+  ))
 
   // En el drawer móvil siempre se muestra expandido; "colapsado" es un estado de escritorio.
   const isCollapsed = colapsado && !mobileOpen

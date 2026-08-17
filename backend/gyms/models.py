@@ -55,7 +55,14 @@ class Clase(models.Model):
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='clases')
     nombre = models.CharField(max_length=150)
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES)
+    # `profesor` se conserva como texto libre (es lo que se imprime en el horario y hay
+    # clases cargadas con él). `coach` es la liga real al usuario, para que un entrenador
+    # pueda ver cuáles son sus clases; es opcional porque no todo profesor tiene cuenta.
     profesor = models.CharField(max_length=150)
+    coach = models.ForeignKey(
+        'usuarios.Usuario', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='clases_impartidas',
+    )
     hora_inicio = models.TimeField()
     hora_fin = models.TimeField()
     dias = models.CharField(max_length=100)

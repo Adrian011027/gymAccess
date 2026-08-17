@@ -278,26 +278,26 @@ export default function Socios() {
             <form onSubmit={save} className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>NOMBRE</label>
-                  <input required value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} className={inputCls} style={INPUT_STYLE} />
+                  <label htmlFor="socio-nombre" className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>NOMBRE</label>
+                  <input id="socio-nombre" required value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))} className={inputCls} style={INPUT_STYLE} />
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>APELLIDO</label>
-                  <input required value={form.apellido} onChange={e => setForm(f => ({ ...f, apellido: e.target.value }))} className={inputCls} style={INPUT_STYLE} />
+                  <label htmlFor="socio-apellido" className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>APELLIDO</label>
+                  <input id="socio-apellido" required value={form.apellido} onChange={e => setForm(f => ({ ...f, apellido: e.target.value }))} className={inputCls} style={INPUT_STYLE} />
                 </div>
               </div>
               <div>
-                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>EMAIL</label>
-                <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className={inputCls} style={INPUT_STYLE} />
+                <label htmlFor="socio-email" className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>EMAIL</label>
+                <input id="socio-email" type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} className={inputCls} style={INPUT_STYLE} />
               </div>
               <div>
-                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>TELÉFONO</label>
-                <input value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} className={inputCls} style={INPUT_STYLE} />
+                <label htmlFor="socio-telefono" className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>TELÉFONO</label>
+                <input id="socio-telefono" value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} className={inputCls} style={INPUT_STYLE} />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>SEXO</label>
-                  <select value={form.sexo} onChange={e => setForm(f => ({ ...f, sexo: e.target.value }))} className={inputCls} style={INPUT_STYLE}>
+                  <label htmlFor="socio-sexo" className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>SEXO</label>
+                  <select id="socio-sexo" value={form.sexo} onChange={e => setForm(f => ({ ...f, sexo: e.target.value }))} className={inputCls} style={INPUT_STYLE}>
                     <option value="">—</option>
                     <option value="M">Masculino</option>
                     <option value="F">Femenino</option>
@@ -311,8 +311,8 @@ export default function Socios() {
               </div>
               {!form.id && (
                 <div>
-                  <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>PLAN</label>
-                  <select value={form.plan_id} onChange={e => setForm(f => ({ ...f, plan_id: e.target.value }))} className={inputCls} style={INPUT_STYLE}>
+                  <label htmlFor="socio-plan" className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>PLAN</label>
+                  <select id="socio-plan" value={form.plan_id} onChange={e => setForm(f => ({ ...f, plan_id: e.target.value }))} className={inputCls} style={INPUT_STYLE}>
                     <option value="">Sin plan</option>
                     {planes.map(p => (
                       <option key={p.id} value={p.id}>{p.nombre} — ${p.precio}</option>

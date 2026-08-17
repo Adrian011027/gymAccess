@@ -1,0 +1,54 @@
+name: gymaccess
+
+services:
+  db:
+    image: postgres:15-alpine          # misma imagen que ya usa saas_agenda: no baja capas nuevas
+    container_name: gymaccess_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-gymaccess}
+      POSTGRES_USER: ${DB_USER:-gymaccess}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD en .env}
+    volumes:
+      - gymaccess_pg_data:/var/lib/postgresql/data
+    ports:
+      # 5433 en el host (5432 ya lo usa el postgres local) y solo en loopback:
+      # no queda expuesto a internet.
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-gymaccess} -d ${DB_NAME:-gymaccess}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+    container_name: gymaccess_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-gymaccess}
+      DB_USER: ${DB_USER:-gymaccess}
+      DB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD en .env}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?falta DJANGO_SECRET_KEY en .env}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DJANGO_CORS_ORIGINS: ${DJANGO_CORS_ORIGINS:-}
+    volumes:
+      - gymaccess_static:/app/staticfiles
+      - gymaccess_media:/app/media
+    ports:
+      # 8001 porque saas_agenda ya ocupa 8000 y 3000 dentro de su red.
+      # Solo loopback: nginx es quien publica el servicio hacia afuera.
+      - "127.0.0.1:8001:8000"
+
+volumes:
+  gymaccess_pg_data:
+  gymaccess_static:
+  gymaccess_media:

@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 
+from django.utils import timezone
 from rest_framework import status
 
 from gyms.tests import BaseAPITestCase
@@ -219,3 +220,93 @@ class AccesoListStatsTests(BaseAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data['accesos_hoy'], 1)
         self.assertIn('horarios_concurridos', resp.data)
+
+
+class AntiPassbackTests(BaseAPITestCase):
+    """Reescanear dentro de la ventana abre la puerta pero no cuenta visita nueva.
+
+    Sin esto, escanear cinco veces en la entrada inflaba el aforo con cinco visitas
+    que nunca ocurrieron, y prestarle el código a alguien más era gratis.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.socio = Socio.objects.create(gym=self.gym, nombre='Ana', apellido='Lopez')
+        self.plan = Plan.objects.create(
+            gym=self.gym, nombre='Mensual', tipo='mensual', precio=500, duracion_dias=30,
+        )
+        Membresia.objects.create(
+            socio=self.socio, plan=self.plan, sucursal=self.sucursal,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=30), estado='activa',
+        )
+        MetodoAcceso.objects.create(socio=self.socio, tipo='qr', token='TOKEN123')
+
+    def _checkin(self):
+        return self.client.post('/api/accesos/checkin/', {
+            'token': 'TOKEN123', 'sucursal_id': self.sucursal.id,
+        })
+
+    def test_primer_acceso_cuenta_y_no_marca_repetido(self):
+        resp = self._checkin()
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(resp.data['repetido'])
+        self.assertEqual(Acceso.objects.filter(socio=self.socio).count(), 1)
+
+    def test_reescaneo_inmediato_no_duplica_el_registro(self):
+        self._checkin()
+        resp = self._checkin()
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, 'la puerta debe abrir igual')
+        self.assertTrue(resp.data['repetido'])
+        self.assertEqual(Acceso.objects.filter(socio=self.socio).count(), 1)
+
+    def test_cinco_escaneos_seguidos_cuentan_una_visita(self):
+        for _ in range(5):
+            self._checkin()
+        self.assertEqual(Acceso.objects.filter(socio=self.socio).count(), 1)
+
+    def test_pasada_la_ventana_cuenta_visita_nueva(self):
+        self._checkin()
+        viejo = Acceso.objects.get(socio=self.socio)
+        # 4h01m atrás: justo fuera de la ventana
+        Acceso.objects.filter(id=viejo.id).update(
+            timestamp=timezone.now() - timedelta(hours=4, minutes=1),
+        )
+        resp = self._checkin()
+        self.assertFalse(resp.data['repetido'])
+        self.assertEqual(Acceso.objects.filter(socio=self.socio).count(), 2)
+
+    def test_dentro_de_la_ventana_por_poco_sigue_siendo_repetido(self):
+        self._checkin()
+        viejo = Acceso.objects.get(socio=self.socio)
+        Acceso.objects.filter(id=viejo.id).update(
+            timestamp=timezone.now() - timedelta(hours=3, minutes=59),
+        )
+        resp = self._checkin()
+        self.assertTrue(resp.data['repetido'])
+        self.assertEqual(Acceso.objects.filter(socio=self.socio).count(), 1)
+
+    def test_la_ventana_es_por_socio_no_global(self):
+        otro = Socio.objects.create(gym=self.gym, nombre='Luis', apellido='Diaz')
+        Membresia.objects.create(
+            socio=otro, plan=self.plan, sucursal=self.sucursal,
+            fecha_inicio=date.today() - timedelta(days=1),
+            fecha_fin=date.today() + timedelta(days=30), estado='activa',
+        )
+        MetodoAcceso.objects.create(socio=otro, tipo='qr', token='TOKEN-LUIS')
+        self._checkin()
+        resp = self.client.post('/api/accesos/checkin/', {
+            'token': 'TOKEN-LUIS', 'sucursal_id': self.sucursal.id,
+        })
+        self.assertFalse(resp.data['repetido'], 'el reingreso de Ana no debe afectar a Luis')
+        self.assertEqual(Acceso.objects.count(), 2)
+
+    def test_un_acceso_denegado_previo_no_bloquea_el_conteo(self):
+        """Sólo los accesos permitidos abren ventana; los denegados no."""
+        Acceso.objects.create(
+            socio=self.socio, sucursal=self.sucursal, resultado='denegado',
+            motivo_denegado='membresia_vencida', metodo_usado='qr',
+        )
+        resp = self._checkin()
+        self.assertFalse(resp.data['repetido'])
+        self.assertEqual(Acceso.objects.filter(resultado='permitido').count(), 1)

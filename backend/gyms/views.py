@@ -1,5 +1,5 @@
 from rest_framework import viewsets, permissions
-from usuarios.permissions import AdminOSoloLectura, EsAdminGym
+from usuarios.permissions import AdminOSoloLectura, EsAdminGym, NoEsCoachOSoloLectura
 from notificaciones.models import Notificacion
 from .models import Gym, Sucursal, Clase, Equipamiento
 from .serializers import GymSerializer, SucursalSerializer, ClaseSerializer, EquipamientoSerializer
@@ -29,10 +29,14 @@ class SucursalViewSet(viewsets.ModelViewSet):
 
 class ClaseViewSet(viewsets.ModelViewSet):
     serializer_class = ClaseSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, NoEsCoachOSoloLectura]
 
     def get_queryset(self):
-        return Clase.objects.filter(gym_id=self.request.user.gym_id, activa=True)
+        qs = Clase.objects.filter(gym_id=self.request.user.gym_id, activa=True)
+        # El coach entra a ver su horario, no el del gym entero.
+        if self.request.user.rol == 'coach':
+            qs = qs.filter(coach=self.request.user)
+        return qs.select_related('coach')
 
     def perform_create(self, serializer):
         serializer.save(gym_id=self.request.user.gym_id)

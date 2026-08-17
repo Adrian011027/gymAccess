@@ -19,6 +19,7 @@ class GymSerializer(serializers.ModelSerializer):
 class ClaseSerializer(serializers.ModelSerializer):
     tipo_display = serializers.CharField(source='get_tipo_display', read_only=True)
     nivel_display = serializers.CharField(source='get_nivel_display', read_only=True)
+    coach_nombre = serializers.CharField(source='coach.nombre', read_only=True, default=None)
 
     class Meta:
         model = Clase

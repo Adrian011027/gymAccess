@@ -70,24 +70,27 @@ TEMPLATES = [
 WSGI_APPLICATION = 'gymaccess.wsgi.application'
 
 # --- SQLite: base de datos local para la demo/prototipo (sin servidor ni contraseñas) ---
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# Postgres en cuanto exista DB_HOST (contenedor y servidor); SQLite si no, para que
+# el desarrollo local y los tests sigan funcionando sin levantar nada.
+if os.environ.get('DB_HOST'):
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME', 'gymaccess'),
+            'USER': os.environ.get('DB_USER', 'gymaccess'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+            'HOST': os.environ['DB_HOST'],
+            'PORT': os.environ.get('DB_PORT', '5432'),
+            'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', 60)),
+        }
     }
-}
-
-# --- MySQL: descomenta esto (y comenta el bloque de arriba) para usar MySQL en producción ---
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.mysql',
-#         'NAME': 'gymaccess_db',
-#         'USER': 'root',
-#         'PASSWORD': 'Passw0rd1',
-#         'HOST': 'localhost',
-#         'PORT': '3306',
-#     }
-# }
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 AUTH_USER_MODEL = 'usuarios.Usuario'
 
@@ -135,6 +138,7 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 

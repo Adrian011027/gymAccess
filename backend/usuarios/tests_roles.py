@@ -34,6 +34,9 @@ LECTURAS = [
 # Módulos reservados al admin del gym
 SOLO_ADMIN = {'gastos', 'equipamiento', 'usuarios'}
 
+# El coach da clases: no toca la caja. Todo lo de admin más los pagos.
+VETADO_A_COACH = SOLO_ADMIN | {'pagos'}
+
 
 class RolBase(BaseAPITestCase):
     def crear_rol(self, rol, email=None):
@@ -57,12 +60,55 @@ class MatrizDeLecturaTests(RolBase):
             esperado = status.HTTP_403_FORBIDDEN if nombre in SOLO_ADMIN else status.HTTP_200_OK
             self.assertEqual(code, esperado, f'{nombre} devolvió {code}')
 
-    def test_coach_tiene_los_mismos_limites_que_recepcion(self):
-        """'coach' no está contemplado en ROLES_ADMIN, así que cae en el mismo cajón."""
+    def test_coach_no_tiene_acceso_a_la_caja(self):
+        """El coach ve la operación y su horario, pero los pagos le quedan fuera:
+        un entrenador no cobra."""
         self.authenticate(self.crear_rol('coach'))
         for nombre, code in self._leer_todo().items():
-            esperado = status.HTTP_403_FORBIDDEN if nombre in SOLO_ADMIN else status.HTTP_200_OK
+            esperado = status.HTTP_403_FORBIDDEN if nombre in VETADO_A_COACH else status.HTTP_200_OK
             self.assertEqual(code, esperado, f'{nombre} devolvió {code}')
+
+    def test_coach_no_puede_registrar_pagos(self):
+        socio = Socio.objects.create(gym=self.gym, nombre='Ana', apellido='Lopez')
+        plan = Plan.objects.create(gym=self.gym, nombre='Mensual', tipo='mensual',
+                                   precio=500, duracion_dias=30)
+        membresia = Membresia.objects.create(
+            socio=socio, plan=plan, sucursal=self.sucursal,
+            fecha_inicio=HOY(), fecha_fin=HOY() + timedelta(days=30), estado='vencida',
+        )
+        self.authenticate(self.crear_rol('coach'))
+        resp = self.client.post('/api/socios/pagos/', {
+            'membresia': membresia.id, 'monto': '500.00', 'metodo': 'efectivo',
+        })
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_coach_solo_ve_sus_propias_clases(self):
+        coach = self.crear_rol('coach')
+        otro = self.crear_rol('coach', email='otro-coach@round3.com')
+        Clase.objects.create(
+            gym=self.gym, nombre='Boxeo 7am', tipo='fisico', profesor='Juan',
+            coach=coach, hora_inicio='07:00', hora_fin='08:00', dias='L,M,V',
+        )
+        Clase.objects.create(
+            gym=self.gym, nombre='Sparring 9am', tipo='sparring', profesor='Luis',
+            coach=otro, hora_inicio='09:00', hora_fin='10:00', dias='S',
+        )
+        self.authenticate(coach)
+        resp = self.client.get('/api/gyms/clases/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual([c['nombre'] for c in resp.data], ['Boxeo 7am'])
+
+    def test_coach_no_edita_clases(self):
+        coach = self.crear_rol('coach')
+        clase = Clase.objects.create(
+            gym=self.gym, nombre='Boxeo 7am', tipo='fisico', profesor='Juan',
+            coach=coach, hora_inicio='07:00', hora_fin='08:00', dias='L,M,V',
+        )
+        self.authenticate(coach)
+        self.assertEqual(
+            self.client.patch(f'/api/gyms/clases/{clase.id}/', {'cupo_max': 99}).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
 
     def test_anonimo_no_lee_nada(self):
         cliente = APIClient()

@@ -1,6 +1,27 @@
+import calendar
+from datetime import timedelta
+
 from django.db import models
 from django.utils import timezone
 from gyms.models import Gym, Sucursal
+
+# Días que un socio puede pagar tarde sin perder su día de corte. Pasados estos, el
+# siguiente pago cuenta como reinscripción y el ancla se mueve al día en que pagó.
+DIAS_GRACIA_REINSCRIPCION = 30
+
+
+def sumar_meses(fecha, meses):
+    """Suma meses conservando el día del mes, recortando al último día si no existe.
+
+    El 31 de enero + 1 mes es el 28 de febrero, no el 3 de marzo. Y el mes siguiente
+    vuelve al 31: el ancla es el día original, no el recortado, así que un socio que se
+    inscribió un día 31 no se va corriendo hacia atrás un día por cada febrero.
+    """
+    mes_total = fecha.month - 1 + meses
+    anio = fecha.year + mes_total // 12
+    mes = mes_total % 12 + 1
+    dia = min(fecha.day, calendar.monthrange(anio, mes)[1])
+    return fecha.replace(year=anio, month=mes, day=dia)
 
 
 class Plan(models.Model):
@@ -12,6 +33,11 @@ class Plan(models.Model):
         ('visita', 'Visita Suelta'),
         ('clases', 'Paquete de Clases'),
     ]
+
+    # Los planes recurrentes se cobran por mes de calendario, no por número de días:
+    # así el socio conserva su día de corte (se inscribió un 24, paga los 24). Los que
+    # no están aquí (visita, clases) caen a duracion_dias.
+    MESES_POR_TIPO = {'mensual': 1, 'trimestral': 3, 'semestral': 6, 'anual': 12}
 
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='planes')
     nombre = models.CharField(max_length=100)
@@ -26,6 +52,21 @@ class Plan(models.Model):
 
     def __str__(self):
         return f'{self.nombre} - ${self.precio}'
+
+    @property
+    def es_recurrente(self):
+        return self.tipo in self.MESES_POR_TIPO
+
+    def avanzar_periodo(self, desde):
+        """Devuelve la fecha de fin de un período que arranca en `desde`.
+
+        None significa membresía sin vencimiento (plan sin duración configurada).
+        """
+        if self.es_recurrente:
+            return sumar_meses(desde, self.MESES_POR_TIPO[self.tipo])
+        if self.duracion_dias:
+            return desde + timedelta(days=self.duracion_dias)
+        return None
 
 
 class Socio(models.Model):
@@ -96,6 +137,37 @@ class Membresia(models.Model):
 
     def __str__(self):
         return f'{self.socio} - {self.plan} ({self.estado})'
+
+    def renovar(self, hoy=None):
+        """Aplica un pago: activa la membresía y recorre el período.
+
+        La fecha de cobro es fija por socio: quien se inscribió un 24 paga los 24, y
+        adelantar el pago al 19 no le quita esos 5 días. Por eso el período se cuenta
+        desde `fecha_fin` (donde quedó), no desde hoy.
+
+        La excepción es el moroso: si lleva más de DIAS_GRACIA_REINSCRIPCION vencido no
+        se le arrastran los meses que no vino — se le trata como alta nueva y su día de
+        corte pasa a ser el día en que volvió.
+        """
+        hoy = hoy or timezone.localdate()
+
+        if self.fecha_fin is None:
+            # Nunca tuvo vencimiento (o el plan no lo define): se ancla a hoy.
+            ancla = hoy
+            self.fecha_inicio = hoy
+        elif self.fecha_fin < hoy - timedelta(days=DIAS_GRACIA_REINSCRIPCION):
+            ancla = hoy
+            self.fecha_inicio = hoy
+        else:
+            # Al corriente o dentro de la gracia: conserva su día de corte.
+            ancla = self.fecha_fin
+
+        self.fecha_fin = self.plan.avanzar_periodo(ancla)
+        if self.plan.num_clases:
+            self.clases_restantes = self.plan.num_clases
+        self.estado = 'activa'
+        self.save()
+        return self
 
 
 class Pago(models.Model):

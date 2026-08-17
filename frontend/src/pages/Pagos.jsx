@@ -104,9 +104,14 @@ export default function Pagos() {
 
   const lista = tab === 'hoy' ? pendHoy : tab === 'semana' ? pendSem : atrasados
 
-  const totalCobradoMes = membresias
-    .filter(m => m.estado === 'activa')
-    .reduce((sum, m) => sum + Number(m.plan_precio || 0), 0)
+  // Dinero que entró de verdad este mes: se suman los pagos registrados, no el precio
+  // de las membresías activas. Sumar membresías daba una proyección, no una cobranza:
+  // contaba a quien está activo pero no ha pagado, y perdía el pago de quien se dio de
+  // baja después. El tile dice "Cobrado", así que tiene que ser lo cobrado.
+  const inicioMes = hoy.slice(0, 8) + '01'
+  const totalCobradoMes = pagos
+    .filter(p => p.fecha?.split('T')[0] >= inicioMes)
+    .reduce((sum, p) => sum + Number(p.monto || 0), 0)
 
   const inicioSemana = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
   const pagosHoy = pagos.filter(p => p.fecha?.startsWith(hoy))

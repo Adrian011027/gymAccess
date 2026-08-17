@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db.models import Count
 from django.db.models.functions import ExtractHour
 from django.utils import timezone
@@ -10,6 +12,9 @@ from .serializers import AccesoSerializer, MetodoAccesoSerializer
 from gyms.models import Sucursal
 from socios.models import Membresia, Socio
 from notificaciones.models import Notificacion
+
+# Reescanear dentro de esta ventana no cuenta como visita nueva (anti-passback).
+VENTANA_ANTIPASSBACK = timedelta(hours=4)
 
 
 class MetodoAccesoViewSet(viewsets.ModelViewSet):
@@ -91,6 +96,23 @@ class CheckInView(APIView):
 
         socio = metodo.socio
 
+        # Un socio dado de baja o vetado no entra aunque le queden días pagados: marcar
+        # 'inactivo' es la forma de bloquear a alguien de inmediato, y antes no tenía
+        # ningún efecto sobre la puerta.
+        if not socio.activo:
+            Acceso.objects.create(
+                socio=socio,
+                sucursal=sucursal,
+                metodo_usado=metodo.tipo,
+                resultado='denegado',
+                motivo_denegado='suspendido',
+            )
+            return Response({
+                'acceso': 'denegado',
+                'socio': f'{socio.nombre} {socio.apellido}',
+                'motivo': 'socio suspendido',
+            }, status=status.HTTP_403_FORBIDDEN)
+
         membresia = Membresia.objects.vigentes().filter(socio=socio).first()
 
         if not membresia:
@@ -116,19 +138,31 @@ class CheckInView(APIView):
                 'motivo': 'membresía no activa',
             }, status=status.HTTP_403_FORBIDDEN)
 
-        Acceso.objects.create(
+        # Anti-passback: reescanear dentro de la ventana abre la puerta pero no cuenta
+        # como visita nueva. Sin esto, escanear cinco veces en la entrada inflaba las
+        # estadísticas de aforo con cinco visitas que nunca ocurrieron.
+        repetido = Acceso.objects.filter(
             socio=socio,
-            sucursal=sucursal,
-            membresia=membresia,
-            metodo_usado=metodo.tipo,
             resultado='permitido',
-        )
+            timestamp__gte=timezone.now() - VENTANA_ANTIPASSBACK,
+        ).exists()
+
+        if not repetido:
+            Acceso.objects.create(
+                socio=socio,
+                sucursal=sucursal,
+                membresia=membresia,
+                metodo_usado=metodo.tipo,
+                resultado='permitido',
+            )
+
         return Response({
             'acceso': 'permitido',
             'socio': f'{socio.nombre} {socio.apellido}',
             'foto': request.build_absolute_uri(socio.foto.url) if socio.foto else None,
             'plan': membresia.plan.nombre,
             'vence': membresia.fecha_fin,
+            'repetido': repetido,
         })
 
 

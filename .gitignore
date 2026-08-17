@@ -24,3 +24,13 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+staticfiles/
+backups/
+
+# datos reales de socios: NO subir a repo publico (LFPDPPP)
+datos_sqlite.json
+*.sqlite3
+
+# artefactos de tests
+.coverage
+coverage/

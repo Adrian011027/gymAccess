@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import api from '../api/axios'
+import SucursalSelector from '../components/SucursalSelector'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 
@@ -41,11 +42,12 @@ function avatarColor(name) { return AVATAR_COLORS[name.charCodeAt(0) % AVATAR_CO
 export default function Dashboard() {
   const [socios, setSocios] = useState([])
   const [accesos, setAccesos] = useState(null)
+  const [q, setQ] = useState('')
 
   useEffect(() => {
     api.get('/socios/').then(r => setSocios(r.data)).catch(() => {})
-    api.get('/accesos/stats/').then(r => setAccesos(r.data)).catch(() => {})
-  }, [])
+    api.get(`/accesos/stats/${q}`).then(r => setAccesos(r.data)).catch(() => {})
+  }, [q])
 
   const sociosActivos = socios.filter(s => s.activo).length
 
@@ -63,6 +65,10 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-5">
+      <div className="flex justify-end">
+        <SucursalSelector onChange={setQ} />
+      </div>
+
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-xl p-5 flex items-center gap-4" style={CARD_STYLE}>

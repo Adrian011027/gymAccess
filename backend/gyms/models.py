@@ -8,11 +8,24 @@ class Gym(models.Model):
         ('mixto', 'Mixto'),
     ]
 
+    # Qué pasa cuando un socio se presenta en una sucursal que no es la suya. No hay
+    # una respuesta universal: hay gyms donde la membresía es de un local concreto y
+    # otros donde da lo mismo, así que lo decide el dueño.
+    POLITICA_CHOICES = [
+        ('libre', 'Puede entrar a cualquier sucursal'),
+        ('autorizacion', 'Requiere autorización del dueño'),
+        ('bloqueado', 'Solo su sucursal'),
+    ]
+
     nombre = models.CharField(max_length=200)
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, default='mixto')
     logo = models.ImageField(upload_to='gyms/logos/', null=True, blank=True)
     telefono = models.CharField(max_length=20, blank=True)
     email_contacto = models.EmailField(blank=True)
+    politica_visitantes = models.CharField(
+        max_length=20, choices=POLITICA_CHOICES, default='libre',
+        help_text='Qué hacer si un socio se presenta en una sucursal distinta a la suya',
+    )
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
 
@@ -53,6 +66,12 @@ class Clase(models.Model):
     ]
 
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='clases')
+    # Nulo = se imparte en todas las sucursales. Un horario y un profesor suelen ser de
+    # un local concreto, pero hay clases que se replican, así que no se obliga.
+    sucursal = models.ForeignKey(
+        Sucursal, on_delete=models.CASCADE,
+        null=True, blank=True, related_name='clases'
+    )
     nombre = models.CharField(max_length=150)
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES)
     profesor = models.CharField(max_length=150)
@@ -83,6 +102,12 @@ class Equipamiento(models.Model):
     ]
 
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='equipamientos')
+    # Nulo = no asignado a un local. `ubicacion` sigue siendo el detalle fino
+    # ("bodega", "área de ring"); esto es de qué sucursal es el inventario.
+    sucursal = models.ForeignKey(
+        Sucursal, on_delete=models.CASCADE,
+        null=True, blank=True, related_name='equipamientos'
+    )
     nombre = models.CharField(max_length=200)
     categoria = models.CharField(max_length=20, choices=CATEGORIA_CHOICES)
     cantidad = models.PositiveIntegerField(default=1)

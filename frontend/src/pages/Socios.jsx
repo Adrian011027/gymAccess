@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import api from '../api/axios'
 import toast from 'react-hot-toast'
+import { useAuth } from '../context/AuthContext'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 const INPUT_STYLE = { backgroundColor: '#0d1117', border: '1px solid #21262d', color: '#fff' }
@@ -39,6 +40,7 @@ function planBadge(nombre) {
 }
 
 export default function Socios() {
+  const { sucursalId } = useAuth()
   const [socios, setSocios] = useState([])
   const [planes, setPlanes] = useState([])
   const [sucursales, setSucursales] = useState([])
@@ -50,6 +52,13 @@ export default function Socios() {
   const [huellaModal, setHuellaModal] = useState(null)
   const [huellaEstado, setHuellaEstado] = useState('idle') // idle | esperando | ok | error
   const [huellaMsg, setHuellaMsg] = useState('')
+  // Cambiar la fecha de próximo pago exige contraseña del dueño; este estado guarda
+  // el cambio pendiente mientras se pide esa autorización.
+  const [autorizacion, setAutorizacion] = useState(null)
+  const [authPass, setAuthPass] = useState('')
+  const [authMotivo, setAuthMotivo] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
+  const [authError, setAuthError] = useState('')
 
   const load = () => api.get('/socios/').then(r => setSocios(r.data)).catch(() => {})
   useEffect(() => {
@@ -88,11 +97,35 @@ export default function Socios() {
     }
   }
 
+  const fechaOriginal = form.membresia_reciente?.fecha_fin || ''
+
+  const guardarSocio = async () => {
+    // plan_id y proximo_pago no son campos de Socio: se extraen solo para excluirlos.
+    const { plan_id: _p, proximo_pago: _f, ...socioData } = form
+    await api.patch(`/socios/${form.id}/`, socioData)
+  }
+
   const save = async e => {
     e.preventDefault()
+
+    // Si movió la fecha de próximo pago, nada se guarda hasta que el dueño autorice:
+    // así una autorización rechazada no deja el resto del formulario ya aplicado.
+    if (form.id && form.proximo_pago && form.proximo_pago !== fechaOriginal) {
+      setAuthPass('')
+      setAuthMotivo('')
+      setAuthError('')
+      setAutorizacion({
+        membresiaId: form.membresia_reciente.id,
+        socio: `${form.nombre} ${form.apellido}`,
+        de: fechaOriginal,
+        a: form.proximo_pago,
+      })
+      return
+    }
+
     setLoading(true)
     try {
-      const { plan_id, ...socioData } = form
+      const { plan_id, proximo_pago: _f, ...socioData } = form
       if (form.id) {
         await api.patch(`/socios/${form.id}/`, socioData)
         toast.success('Socio actualizado')
@@ -122,6 +155,34 @@ export default function Socios() {
       toast.error('Error al guardar')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const confirmarAutorizacion = async e => {
+    e.preventDefault()
+    setAuthLoading(true)
+    setAuthError('')
+    try {
+      await api.post(`/socios/membresias/${autorizacion.membresiaId}/ajustar-vencimiento/`, {
+        fecha_fin: autorizacion.a,
+        password: authPass,
+        motivo: authMotivo,
+      })
+      await guardarSocio()
+      toast.success('Fecha de próximo pago actualizada')
+      setAutorizacion(null)
+      setAuthPass('')
+      setModal(false)
+      setForm(EMPTY)
+      load()
+    } catch (err) {
+      const s = err.response?.status
+      if (s === 403) setAuthError('Contraseña de autorización incorrecta.')
+      else if (s === 429) setAuthError('Demasiados intentos. Espera un minuto.')
+      else setAuthError(err.response?.data?.fecha_fin?.[0] || 'No se pudo aplicar el cambio.')
+      setAuthPass('')
+    } finally {
+      setAuthLoading(false)
     }
   }
 
@@ -204,7 +265,16 @@ export default function Socios() {
                         style={{ backgroundColor: avatarColor(s.nombre), color: '#0d1117' }}>
                         {initials(s.nombre, s.apellido)}
                       </div>
-                      <span className="text-xs font-semibold text-white">{s.nombre} {s.apellido}</span>
+                      <div className="min-w-0">
+                        <span className="text-xs font-semibold text-white">{s.nombre} {s.apellido}</span>
+                        {/* Se ve a los socios de todas las sucursales, pero se marca
+                            cuáles no son de aquí: ver no es lo mismo que dejar entrar. */}
+                        {s.sucursal && sucursalId && s.sucursal !== sucursalId && (
+                          <span className="block text-[10px] font-semibold" style={{ color: '#f97316' }}>
+                            ⌂ {s.sucursal_nombre}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </td>
                   <td className="px-4 py-3">
@@ -248,7 +318,7 @@ export default function Socios() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11c1.5 0 2 1 2 2.5S13 17 12 17s-2-1-2-2.5.5-3.5 2-3.5zm0-7a7 7 0 00-7 7c0 1.5.5 3 2 4.5M12 4a7 7 0 017 7c0 3-1 5-3 7M9 8.5a3 3 0 016 0c0 .5-.1 1-.3 1.5" />
                         </svg>
                       </button>
-                      <button onClick={() => { setForm(s); setModal(true) }} style={{ color: '#8b949e' }} className="hover:text-white transition-colors">
+                      <button onClick={() => { setForm({ ...s, proximo_pago: s.membresia_reciente?.fecha_fin || '' }); setModal(true) }} style={{ color: '#8b949e' }} className="hover:text-white transition-colors">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                         </svg>
@@ -309,6 +379,28 @@ export default function Socios() {
                   <input type="date" value={form.fecha_nacimiento || ''} onChange={e => setForm(f => ({ ...f, fecha_nacimiento: e.target.value }))} className={inputCls} style={INPUT_STYLE} />
                 </div>
               </div>
+              {form.id && form.membresia_reciente && (
+                <div className="rounded-lg p-3" style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
+                  <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>
+                    PRÓXIMO PAGO
+                  </label>
+                  <input
+                    type="date"
+                    value={form.proximo_pago || ''}
+                    onChange={e => setForm(f => ({ ...f, proximo_pago: e.target.value }))}
+                    className={inputCls}
+                    style={INPUT_STYLE}
+                  />
+                  <p className="text-[10px] mt-1.5 leading-relaxed" style={{ color: '#8b949e' }}>
+                    Plan {form.membresia_reciente.plan} · estado {form.membresia_reciente.estado}
+                  </p>
+                  {form.proximo_pago !== fechaOriginal && (
+                    <p className="text-[10px] mt-1 font-semibold" style={{ color: '#f97316' }}>
+                      ⚠ Cambiar esta fecha requiere la contraseña del dueño.
+                    </p>
+                  )}
+                </div>
+              )}
               {!form.id && (
                 <div>
                   <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>PLAN</label>
@@ -330,6 +422,62 @@ export default function Socios() {
                   className="flex-1 py-2.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
                   style={{ backgroundColor: '#22c55e', color: '#0d1117' }}>
                   {loading ? 'Guardando...' : 'Guardar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Autorización del dueño para mover la fecha de próximo pago */}
+      {autorizacion && (
+        <div className="fixed inset-0 flex items-center justify-center z-[60] p-4" style={{ backgroundColor: 'rgba(0,0,0,0.8)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-sm" style={CARD_STYLE}>
+            <h2 className="text-sm font-bold text-white">Autorización requerida</h2>
+            <p className="text-xs mt-2 leading-relaxed" style={{ color: '#8b949e' }}>
+              Cambiar el próximo pago de <span className="text-white font-semibold">{autorizacion.socio}</span>
+              {' '}de <span className="text-white">{autorizacion.de || '—'}</span>
+              {' '}a <span style={{ color: '#f97316' }} className="font-semibold">{autorizacion.a}</span>.
+            </p>
+            <form onSubmit={confirmarAutorizacion} className="space-y-3 mt-4">
+              <div>
+                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>
+                  CONTRASEÑA DEL DUEÑO
+                </label>
+                <input
+                  type="password" required autoFocus autoComplete="off"
+                  value={authPass}
+                  onChange={e => { setAuthPass(e.target.value); setAuthError('') }}
+                  className={inputCls} style={INPUT_STYLE}
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>
+                  MOTIVO (OPCIONAL)
+                </label>
+                <input
+                  value={authMotivo}
+                  onChange={e => setAuthMotivo(e.target.value)}
+                  placeholder="Ej. pagó en efectivo el viernes"
+                  className={inputCls} style={INPUT_STYLE}
+                />
+              </div>
+              {authError && (
+                <p className="text-[11px] font-semibold" style={{ color: '#ef4444' }}>{authError}</p>
+              )}
+              <p className="text-[10px]" style={{ color: '#3d444d' }}>
+                Queda registrado en la bitácora quién lo pidió y quién lo autorizó.
+              </p>
+              <div className="flex gap-3 pt-1">
+                <button type="button" onClick={() => { setAutorizacion(null); setAuthPass('') }}
+                  className="flex-1 py-2.5 rounded-lg text-xs font-semibold"
+                  style={{ border: '1px solid #21262d', color: '#8b949e', backgroundColor: 'transparent' }}>
+                  Cancelar
+                </button>
+                <button type="submit" disabled={authLoading || !authPass}
+                  className="flex-1 py-2.5 rounded-lg text-xs font-bold disabled:opacity-40"
+                  style={{ backgroundColor: '#f97316', color: '#0d1117' }}>
+                  {authLoading ? 'Verificando...' : 'Autorizar'}
                 </button>
               </div>
             </form>

@@ -95,7 +95,56 @@ export default function Configuracion() {
   const [planLoading, setPlanLoading] = useState(false)
 
   const cargarPlanes = () => api.get('/socios/planes/').then(r => setPlanes(r.data)).catch(() => {})
-  useEffect(() => { cargarPlanes() }, [])
+
+  // --- Sucursales y política de visitantes ---
+  const SUC_EMPTY = { nombre: '', direccion: '', telefono: '' }
+  const POLITICAS = [
+    ['libre', 'Puede entrar a cualquier sucursal'],
+    ['autorizacion', 'Requiere autorización del dueño'],
+    ['bloqueado', 'Solo su sucursal'],
+  ]
+
+  const [sucursales, setSucursales] = useState([])
+  const [sucModal, setSucModal] = useState(false)
+  const [sucForm, setSucForm] = useState(SUC_EMPTY)
+  const [gymReal, setGymReal] = useState(null)
+  const [guardando, setGuardando] = useState(false)
+
+  const cargarSucursales = () => api.get('/gyms/sucursales/').then(r => setSucursales(r.data)).catch(() => {})
+  const cargarGym = () => api.get('/gyms/').then(r => setGymReal(r.data[0] || null)).catch(() => {})
+
+  useEffect(() => {
+    cargarPlanes()
+    cargarSucursales()
+    cargarGym()
+  }, [])
+
+  const errorDe = err => {
+    const d = err.response?.data
+    if (typeof d === 'object' && d) return Object.values(d).flat()[0]
+    return 'No se pudo guardar'
+  }
+
+  const guardarSucursal = async e => {
+    e.preventDefault()
+    setGuardando(true)
+    try {
+      if (sucForm.id) await api.patch(`/gyms/sucursales/${sucForm.id}/`, sucForm)
+      else await api.post('/gyms/sucursales/', { ...sucForm, gym: gymReal?.id })
+      toast.success('Sucursal guardada')
+      setSucModal(false)
+      setSucForm(SUC_EMPTY)
+      cargarSucursales()
+    } catch (err) { toast.error(errorDe(err)) } finally { setGuardando(false) }
+  }
+
+  const cambiarPolitica = async valor => {
+    try {
+      await api.patch(`/gyms/${gymReal.id}/`, { politica_visitantes: valor })
+      setGymReal(g => ({ ...g, politica_visitantes: valor }))
+      toast.success('Política actualizada')
+    } catch (err) { toast.error(errorDe(err)) }
+  }
 
   const guardarPlan = async e => {
     e.preventDefault()
@@ -263,6 +312,110 @@ export default function Configuracion() {
           </div>
         </div>
       </div>
+
+      {/* Sucursales */}
+      <div className="rounded-xl p-6" style={CARD_STYLE}>
+        <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-white">Sucursales</h3>
+            <p className="text-[10px]" style={{ color: '#8b949e' }}>
+              Cada local tiene su propio inventario, su caja y sus accesos
+            </p>
+          </div>
+          <button
+            onClick={() => { setSucForm(SUC_EMPTY); setSucModal(true) }}
+            className="px-4 py-2 rounded-lg text-xs font-bold"
+            style={{ backgroundColor: '#22c55e', color: '#0d1117' }}
+          >
+            + Nueva sucursal
+          </button>
+        </div>
+        <div className="space-y-2">
+          {sucursales.map(s => (
+            <div key={s.id} className="flex items-center justify-between rounded-lg px-4 py-3"
+              style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
+              <div>
+                <p className="text-xs font-bold text-white">{s.nombre}</p>
+                <p className="text-[10px]" style={{ color: '#8b949e' }}>{s.direccion || 'Sin dirección'}</p>
+              </div>
+              <button onClick={() => { setSucForm(s); setSucModal(true) }}
+                className="text-[10px] font-semibold" style={{ color: '#8b949e' }}>
+                Editar
+              </button>
+            </div>
+          ))}
+          {sucursales.length === 0 && (
+            <p className="text-xs text-center py-4" style={{ color: '#3d444d' }}>Sin sucursales</p>
+          )}
+        </div>
+
+        {/* Política de visitantes */}
+        {gymReal && sucursales.length > 1 && (
+          <div className="mt-5 pt-5" style={{ borderTop: '1px solid #21262d' }}>
+            <p className="text-xs font-bold text-white">Socio en una sucursal que no es la suya</p>
+            <p className="text-[10px] mb-3" style={{ color: '#8b949e' }}>
+              Aplica solo a socios al corriente. Un vencido se rechaza siempre.
+            </p>
+            <div className="space-y-2">
+              {POLITICAS.map(([valor, label]) => (
+                <label key={valor} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio" name="politica" value={valor}
+                    checked={gymReal.politica_visitantes === valor}
+                    onChange={() => cambiarPolitica(valor)}
+                  />
+                  <span className="text-xs" style={{ color: gymReal.politica_visitantes === valor ? '#fff' : '#8b949e' }}>
+                    {label}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Modal sucursal */}
+      {sucModal && (
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-md" style={CARD_STYLE}>
+            <h2 className="text-sm font-bold text-white mb-5">
+              {sucForm.id ? 'Editar sucursal' : 'Nueva sucursal'}
+            </h2>
+            <form onSubmit={guardarSucursal} className="space-y-3">
+              <div>
+                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>NOMBRE</label>
+                <input required value={sucForm.nombre}
+                  onChange={e => setSucForm(f => ({ ...f, nombre: e.target.value }))}
+                  className="mt-1" style={INPUT_STYLE} />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>DIRECCIÓN</label>
+                <input value={sucForm.direccion || ''}
+                  onChange={e => setSucForm(f => ({ ...f, direccion: e.target.value }))}
+                  className="mt-1" style={INPUT_STYLE} />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>TELÉFONO</label>
+                <input value={sucForm.telefono || ''}
+                  onChange={e => setSucForm(f => ({ ...f, telefono: e.target.value }))}
+                  className="mt-1" style={INPUT_STYLE} />
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => setSucModal(false)}
+                  className="flex-1 py-2.5 rounded-lg text-xs font-semibold"
+                  style={{ border: '1px solid #21262d', color: '#8b949e', backgroundColor: 'transparent' }}>
+                  Cancelar
+                </button>
+                <button type="submit" disabled={guardando}
+                  className="flex-1 py-2.5 rounded-lg text-xs font-bold disabled:opacity-50"
+                  style={{ backgroundColor: '#22c55e', color: '#0d1117' }}>
+                  {guardando ? 'Guardando...' : 'Guardar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Planes */}
       <div className="rounded-xl p-6" style={CARD_STYLE}>

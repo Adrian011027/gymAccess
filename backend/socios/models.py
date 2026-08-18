@@ -32,6 +32,13 @@ class Socio(models.Model):
     SEXO_CHOICES = [('M', 'Masculino'), ('F', 'Femenino'), ('O', 'Otro')]
 
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='socios')
+    # Dónde está registrado y dónde paga. El socio sigue siendo del gym: toda sucursal
+    # puede verlo y atenderlo. Esto solo dice de dónde es, para poder reportarlo y para
+    # que el check-in aplique la política de visitantes del gym.
+    sucursal = models.ForeignKey(
+        Sucursal, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='socios'
+    )
     nombre = models.CharField(max_length=150)
     apellido = models.CharField(max_length=150)
     email = models.EmailField(blank=True)
@@ -122,6 +129,39 @@ class Pago(models.Model):
         return f'${self.monto} - {self.membresia.socio}'
 
 
+class AjusteMembresia(models.Model):
+    """Bitácora de cambios manuales a la fecha de vencimiento.
+
+    Mover esta fecha es regalar tiempo de gimnasio sin cobrarlo, así que cada cambio
+    queda registrado: quién lo pidió, quién lo autorizó con su contraseña, desde qué
+    fecha, hacia qué fecha y por qué. Sin esto la autorización no sirve de nada:
+    nadie podría auditar después quién extendió a quién.
+    """
+
+    membresia = models.ForeignKey(Membresia, on_delete=models.CASCADE, related_name='ajustes')
+    fecha_anterior = models.DateField(null=True, blank=True)
+    fecha_nueva = models.DateField(null=True, blank=True)
+    estado_anterior = models.CharField(max_length=20)
+    estado_nuevo = models.CharField(max_length=20)
+    motivo = models.CharField(max_length=255, blank=True)
+    solicitado_por = models.ForeignKey(
+        'usuarios.Usuario', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='ajustes_solicitados'
+    )
+    autorizado_por = models.ForeignKey(
+        'usuarios.Usuario', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='ajustes_autorizados'
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'ajustes_membresia'
+        ordering = ['-creado_en']
+
+    def __str__(self):
+        return f'{self.membresia_id}: {self.fecha_anterior} -> {self.fecha_nueva}'
+
+
 class Gasto(models.Model):
     CATEGORIA_CHOICES = [
         ('renta', 'Renta'),
@@ -134,6 +174,12 @@ class Gasto(models.Model):
     ]
 
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='gastos')
+    # Nulo = gasto del negocio completo (contador, publicidad general). Con sucursal =
+    # de ese local, que es lo que permite saber si una sucursal se paga sola.
+    sucursal = models.ForeignKey(
+        Sucursal, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='gastos'
+    )
     categoria = models.CharField(max_length=30, choices=CATEGORIA_CHOICES)
     descripcion = models.CharField(max_length=255)
     monto = models.DecimalField(max_digits=10, decimal_places=2)

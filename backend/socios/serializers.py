@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Plan, Socio, Membresia, Pago, Gasto
+from .models import AjusteMembresia, Plan, Socio, Membresia, Pago, Gasto
 
 
 class PlanSerializer(serializers.ModelSerializer):
@@ -10,7 +10,9 @@ class PlanSerializer(serializers.ModelSerializer):
 
 class SocioSerializer(serializers.ModelSerializer):
     membresia_activa = serializers.SerializerMethodField()
+    membresia_reciente = serializers.SerializerMethodField()
     codigo_acceso = serializers.SerializerMethodField()
+    sucursal_nombre = serializers.CharField(source='sucursal.nombre', read_only=True)
 
     class Meta:
         model = Socio
@@ -29,6 +31,18 @@ class SocioSerializer(serializers.ModelSerializer):
         if not m:
             return None
         return {'id': m.id, 'plan': m.plan.nombre, 'fecha_fin': m.fecha_fin, 'estado': m.estado}
+
+    def get_membresia_reciente(self, obj):
+        """La última membresía exista o no vigencia. `membresia_activa` es null para un
+        socio vencido, que es justo a quien hay que ajustarle la fecha de próximo pago.
+        """
+        m = obj.membresias.order_by('-fecha_inicio', '-id').first()
+        if not m:
+            return None
+        return {
+            'id': m.id, 'plan': m.plan.nombre,
+            'fecha_inicio': m.fecha_inicio, 'fecha_fin': m.fecha_fin, 'estado': m.estado,
+        }
 
 
 class MembresiaSerializer(serializers.ModelSerializer):
@@ -52,7 +66,31 @@ class PagoSerializer(serializers.ModelSerializer):
         read_only_fields = ['registrado_por', 'fecha']
 
 
+class AjusteMembresiaSerializer(serializers.ModelSerializer):
+    solicitado_por_nombre = serializers.CharField(source='solicitado_por.nombre', read_only=True)
+    autorizado_por_nombre = serializers.CharField(source='autorizado_por.nombre', read_only=True)
+
+    class Meta:
+        model = AjusteMembresia
+        fields = [
+            'id', 'membresia', 'fecha_anterior', 'fecha_nueva',
+            'estado_anterior', 'estado_nuevo', 'motivo',
+            'solicitado_por', 'solicitado_por_nombre',
+            'autorizado_por', 'autorizado_por_nombre', 'creado_en',
+        ]
+
+
+class AjusteVencimientoInputSerializer(serializers.Serializer):
+    """La contraseña solo viaja en el body y nunca se persiste ni se devuelve."""
+
+    fecha_fin = serializers.DateField()
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+    motivo = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+
+
 class GastoSerializer(serializers.ModelSerializer):
+    sucursal_nombre = serializers.CharField(source='sucursal.nombre', read_only=True)
+
     class Meta:
         model = Gasto
         fields = '__all__'

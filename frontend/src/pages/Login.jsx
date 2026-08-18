@@ -15,6 +15,10 @@ export default function Login() {
     setLoading(true)
     try {
       const payload = await login(form.email, form.password)
+      if (payload?.sucursales_permitidas?.length >= 2) {
+        navigate('/seleccionar-sucursal')
+        return
+      }
       const esAdmin = payload?.rol === 'admin' || payload?.rol === 'superadmin'
       navigate(esAdmin ? '/dashboard' : '/checkin')
     } catch {

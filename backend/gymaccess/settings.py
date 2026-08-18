@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'socios',
     'accesos',
     'notificaciones',
+    'tienda',
 ]
 
 MIDDLEWARE = [
@@ -108,6 +109,9 @@ REST_FRAMEWORK = {
         'user': '300/min',     # usuarios autenticados (uso normal del dashboard)
         'login': '10/min',     # intentos de login por IP (anti fuerza bruta)
         'checkin': '60/min',   # kiosco de check-in
+        # Verifica contraseñas de admin: se mantiene bajo a propósito para que no sirva
+        # como banco de pruebas de fuerza bruta.
+        'autorizacion': '5/min',
     },
 }
 

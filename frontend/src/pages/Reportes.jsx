@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
 import api from '../api/axios'
+import SucursalSelector from '../components/SucursalSelector'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 const CAT_COLOR = {
@@ -23,13 +24,19 @@ function mesKey(fechaISO) {
   return `${d.getFullYear()}-${d.getMonth()}`
 }
 
+const SERIE_LABEL = { membresias: 'Membresías', tienda: 'Tienda', gastos: 'Gastos' }
+const SERIE_COLOR = { membresias: '#22c55e', tienda: '#a855f7', gastos: '#f97316' }
+
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null
   return (
     <div className="px-3 py-2 rounded-lg text-xs" style={{ backgroundColor: '#1c2333', border: '1px solid #21262d', color: '#fff' }}>
       <p style={{ color: '#8b949e' }}>{label}</p>
-      <p className="font-bold text-[#22c55e]">Ingresos: ${payload[0]?.value?.toLocaleString()}</p>
-      {payload[1] && <p className="font-bold text-[#f97316]">Gastos: ${payload[1].value.toLocaleString()}</p>}
+      {payload.map(p => (
+        <p key={p.dataKey} className="font-bold" style={{ color: SERIE_COLOR[p.dataKey] }}>
+          {SERIE_LABEL[p.dataKey] || p.dataKey}: ${p.value?.toLocaleString()}
+        </p>
+      ))}
     </div>
   )
 }
@@ -37,11 +44,14 @@ const CustomTooltip = ({ active, payload, label }) => {
 export default function Reportes() {
   const [pagos, setPagos] = useState([])
   const [gastos, setGastos] = useState([])
+  const [ventas, setVentas] = useState([])
+  const [q, setQ] = useState('')
 
   useEffect(() => {
-    api.get('/socios/pagos/').then(r => setPagos(r.data)).catch(() => {})
-    api.get('/socios/gastos/').then(r => setGastos(r.data)).catch(() => {})
-  }, [])
+    api.get(`/socios/pagos/${q}`).then(r => setPagos(r.data)).catch(() => {})
+    api.get(`/socios/gastos/${q}`).then(r => setGastos(r.data)).catch(() => {})
+    api.get(`/tienda/ventas/${q}`).then(r => setVentas(r.data)).catch(() => {})
+  }, [q])
 
   const hoy = new Date()
   const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1)
@@ -51,9 +61,17 @@ export default function Reportes() {
   const pagosMesAnt = pagos.filter(p => new Date(p.fecha) >= inicioMesAnt && new Date(p.fecha) < inicioMes)
   const gastosMes = gastos.filter(g => new Date(g.fecha) >= inicioMes)
   const gastosMesAnt = gastos.filter(g => new Date(g.fecha) >= inicioMesAnt && new Date(g.fecha) < inicioMes)
+  const ventasMes = ventas.filter(v => new Date(v.fecha) >= inicioMes)
+  const ventasMesAnt = ventas.filter(v => new Date(v.fecha) >= inicioMesAnt && new Date(v.fecha) < inicioMes)
 
-  const ingresos = pagosMes.reduce((s, p) => s + Number(p.monto || 0), 0)
-  const ingresosAnt = pagosMesAnt.reduce((s, p) => s + Number(p.monto || 0), 0)
+  // Membresías y tienda se cuentan por separado: mezclarlas esconde si el mes creció
+  // por socios nuevos o por vender más refrescos.
+  const ingresosMembresias = pagosMes.reduce((s, p) => s + Number(p.monto || 0), 0)
+  const ingresosMembresiasAnt = pagosMesAnt.reduce((s, p) => s + Number(p.monto || 0), 0)
+  const ingresosTienda = ventasMes.reduce((s, v) => s + Number(v.total || 0), 0)
+  const ingresosTiendaAnt = ventasMesAnt.reduce((s, v) => s + Number(v.total || 0), 0)
+  const ingresos = ingresosMembresias + ingresosTienda
+  const ingresosAnt = ingresosMembresiasAnt + ingresosTiendaAnt
   const gastosTotal = gastosMes.reduce((s, g) => s + Number(g.monto || 0), 0)
   const gastosTotalAnt = gastosMesAnt.reduce((s, g) => s + Number(g.monto || 0), 0)
   const ganancia = ingresos - gastosTotal
@@ -65,17 +83,30 @@ export default function Reportes() {
   const varIngresos = variacion(ingresos, ingresosAnt)
   const varGastos = variacion(gastosTotal, gastosTotalAnt)
 
-  // Serie de los últimos 7 meses: ingresos vs gastos
+  // Serie de los últimos 7 meses: membresías, tienda y gastos
   const serie = []
   for (let i = 6; i >= 0; i--) {
     const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1)
     const key = `${d.getFullYear()}-${d.getMonth()}`
     serie.push({
       mes: MESES[d.getMonth()],
-      ingresos: pagos.filter(p => mesKey(p.fecha) === key).reduce((s, p) => s + Number(p.monto || 0), 0),
+      membresias: pagos.filter(p => mesKey(p.fecha) === key).reduce((s, p) => s + Number(p.monto || 0), 0),
+      tienda: ventas.filter(v => mesKey(v.fecha) === key).reduce((s, v) => s + Number(v.total || 0), 0),
       gastos: gastos.filter(g => mesKey(g.fecha) === key).reduce((s, g) => s + Number(g.monto || 0), 0),
     })
   }
+
+  // Top productos del mes (unidades vendidas)
+  const porProducto = {}
+  for (const v of ventasMes) {
+    for (const it of v.items || []) {
+      const key = it.producto_nombre || 'Producto'
+      if (!porProducto[key]) porProducto[key] = { unidades: 0, monto: 0 }
+      porProducto[key].unidades += it.cantidad
+      porProducto[key].monto += Number(it.subtotal || 0)
+    }
+  }
+  const topProductos = Object.entries(porProducto).sort((a, b) => b[1].monto - a[1].monto).slice(0, 6)
 
   // Desglose de gastos por categoría (mes en curso)
   const porCategoria = {}
@@ -105,6 +136,7 @@ export default function Reportes() {
             Período: {hoy.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }).replace(/^\w/, c => c.toUpperCase())}
           </p>
         </div>
+        <SucursalSelector onChange={setQ} />
       </div>
 
       {/* KPI cards */}
@@ -117,7 +149,11 @@ export default function Reportes() {
             </svg>
           </div>
           <p className="text-2xl font-black text-white">${ingresos.toLocaleString()}</p>
-          <p className="text-[10px] mt-1" style={{ color: varIngresos == null ? '#3d444d' : varIngresos >= 0 ? '#22c55e' : '#ef4444' }}>
+          <p className="text-[10px] mt-1 flex flex-wrap gap-x-2">
+            <span style={{ color: '#22c55e' }}>Membresías ${ingresosMembresias.toLocaleString()}</span>
+            <span style={{ color: '#a855f7' }}>Tienda ${ingresosTienda.toLocaleString()}</span>
+          </p>
+          <p className="text-[10px] mt-0.5" style={{ color: varIngresos == null ? '#3d444d' : varIngresos >= 0 ? '#22c55e' : '#ef4444' }}>
             {varIngresos == null ? 'Sin datos del mes anterior' : `${varIngresos >= 0 ? '+' : ''}${varIngresos.toFixed(1)}% vs. mes ant.`}
           </p>
         </div>
@@ -157,6 +193,13 @@ export default function Reportes() {
             <p className="text-sm font-bold text-white">Ingresos vs. Gastos</p>
             <p className="text-[10px]" style={{ color: '#8b949e' }}>Últimos 7 meses</p>
           </div>
+          <div className="flex gap-3 ml-auto flex-wrap">
+            {Object.entries(SERIE_LABEL).map(([k, label]) => (
+              <span key={k} className="flex items-center gap-1.5 text-[10px]" style={{ color: '#8b949e' }}>
+                <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: SERIE_COLOR[k] }} />{label}
+              </span>
+            ))}
+          </div>
         </div>
         <ResponsiveContainer width="100%" height={220}>
           <AreaChart data={serie}>
@@ -169,11 +212,16 @@ export default function Reportes() {
                 <stop offset="5%" stopColor="#f97316" stopOpacity={0.12} />
                 <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
               </linearGradient>
+              <linearGradient id="colorTienda" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#a855f7" stopOpacity={0.15} />
+                <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
+              </linearGradient>
             </defs>
             <XAxis dataKey="mes" tick={{ fontSize: 11, fill: '#8b949e' }} axisLine={false} tickLine={false} />
             <YAxis tick={{ fontSize: 11, fill: '#8b949e' }} axisLine={false} tickLine={false} tickFormatter={fmt} />
             <Tooltip content={<CustomTooltip />} />
-            <Area type="monotone" dataKey="ingresos" stroke="#22c55e" strokeWidth={2} fill="url(#colorIngresos)" dot={false} />
+            <Area type="monotone" dataKey="membresias" stroke="#22c55e" strokeWidth={2} fill="url(#colorIngresos)" dot={false} />
+            <Area type="monotone" dataKey="tienda" stroke="#a855f7" strokeWidth={2} fill="url(#colorTienda)" dot={false} />
             <Area type="monotone" dataKey="gastos" stroke="#f97316" strokeWidth={2} fill="url(#colorGastos)" dot={false} />
           </AreaChart>
         </ResponsiveContainer>
@@ -233,6 +281,33 @@ export default function Reportes() {
             ))}
             {ingresosPorPlan.length === 0 && (
               <p className="text-xs text-center py-4" style={{ color: '#3d444d' }}>Sin pagos este mes</p>
+            )}
+          </div>
+        </div>
+
+        {/* Tienda */}
+        <div className="rounded-xl p-5" style={CARD_STYLE}>
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#a855f7' }} />
+            <div>
+              <p className="text-sm font-bold text-white">Más Vendidos en Tienda</p>
+              <p className="text-[10px]" style={{ color: '#8b949e' }}>
+                {ventasMes.length} ticket{ventasMes.length !== 1 ? 's' : ''} · ${ingresosTienda.toLocaleString()} este mes
+              </p>
+            </div>
+          </div>
+          <div className="space-y-4">
+            {topProductos.map(([nombre, d]) => (
+              <div key={nombre} className="flex justify-between items-center">
+                <div>
+                  <p className="text-sm font-bold text-white">{nombre}</p>
+                  <p className="text-[10px]" style={{ color: '#8b949e' }}>{d.unidades} unidad{d.unidades !== 1 ? 'es' : ''}</p>
+                </div>
+                <span className="text-sm font-black" style={{ color: '#a855f7' }}>${d.monto.toLocaleString()}</span>
+              </div>
+            ))}
+            {topProductos.length === 0 && (
+              <p className="text-xs text-center py-4" style={{ color: '#3d444d' }}>Sin ventas este mes</p>
             )}
           </div>
         </div>

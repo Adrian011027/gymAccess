@@ -10,6 +10,26 @@ from .serializers import AccesoSerializer, MetodoAccesoSerializer
 from gyms.models import Sucursal
 from socios.models import Membresia, Socio
 from notificaciones.models import Notificacion
+from usuarios.models import Usuario
+from usuarios.permissions import ROLES_ADMIN
+from usuarios.scoping import SucursalScopedMixin
+
+
+def autorizador_del_gym(gym_id, password):
+    """El admin del gym cuya contraseña coincide, o None.
+
+    Mismo criterio que el ajuste de vencimiento: se recorren todos los admins aunque
+    uno coincida antes, para que el tiempo de respuesta no delate qué cuenta acertó.
+    """
+    if not password:
+        return None
+    encontrado = None
+    for admin in Usuario.objects.filter(
+        gym_id=gym_id, rol__in=ROLES_ADMIN, is_active=True,
+    ).order_by('id'):
+        if admin.check_password(password) and encontrado is None:
+            encontrado = admin
+    return encontrado
 
 
 class MetodoAccesoViewSet(viewsets.ModelViewSet):
@@ -47,13 +67,13 @@ class SincronizarHuellaView(APIView):
         return Response(MetodoAccesoSerializer(metodo).data, status=status.HTTP_200_OK)
 
 
-class AccesoViewSet(viewsets.ReadOnlyModelViewSet):
+class AccesoViewSet(SucursalScopedMixin, viewsets.ReadOnlyModelViewSet):
     serializer_class = AccesoSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Acceso.objects.filter(
-            socio__gym_id=self.request.user.gym_id
+        return self.scope_sucursal(
+            Acceso.objects.filter(socio__gym_id=self.request.user.gym_id)
         ).select_related('socio', 'sucursal').order_by('-timestamp')
 
 
@@ -89,6 +109,14 @@ class CheckInView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Recepción registra entradas en su puerta, no en la del otro local.
+        propia = getattr(request.user, 'sucursal_id', None)
+        if propia is not None and sucursal.id != propia:
+            return Response(
+                {'sucursal_id': 'Solo puedes registrar accesos en tu sucursal.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         socio = metodo.socio
 
         membresia = Membresia.objects.vigentes().filter(socio=socio).first()
@@ -116,12 +144,45 @@ class CheckInView(APIView):
                 'motivo': 'membresía no activa',
             }, status=status.HTTP_403_FORBIDDEN)
 
+        # El socio está al corriente, pero puede no ser de esta sucursal. Qué hacer en
+        # ese caso lo decide el dueño en la configuración del gym: hay negocios donde
+        # la membresía es de un local concreto y otros donde da igual.
+        visitante = (
+            socio.sucursal_id is not None
+            and socio.sucursal_id != sucursal.id
+        )
+        autorizador = None
+        if visitante:
+            politica = socio.gym.politica_visitantes
+            if politica != 'libre':
+                autorizador = autorizador_del_gym(
+                    request.user.gym_id, request.data.get('password'),
+                )
+                if politica == 'bloqueado' or autorizador is None:
+                    Acceso.objects.create(
+                        socio=socio,
+                        sucursal=sucursal,
+                        membresia=membresia,
+                        metodo_usado=metodo.tipo,
+                        resultado='denegado',
+                        motivo_denegado='otra_sucursal',
+                    )
+                    return Response({
+                        'acceso': 'denegado',
+                        'socio': f'{socio.nombre} {socio.apellido}',
+                        'motivo': 'pertenece a otra sucursal',
+                        'sucursal_socio': socio.sucursal.nombre,
+                        # Le dice al kiosco si tiene sentido ofrecer el override.
+                        'requiere_autorizacion': politica == 'autorizacion',
+                    }, status=status.HTTP_403_FORBIDDEN)
+
         Acceso.objects.create(
             socio=socio,
             sucursal=sucursal,
             membresia=membresia,
             metodo_usado=metodo.tipo,
             resultado='permitido',
+            autorizado_por=autorizador,
         )
         return Response({
             'acceso': 'permitido',
@@ -129,11 +190,18 @@ class CheckInView(APIView):
             'foto': request.build_absolute_uri(socio.foto.url) if socio.foto else None,
             'plan': membresia.plan.nombre,
             'vence': membresia.fecha_fin,
+            'visitante': visitante,
+            'sucursal_socio': socio.sucursal.nombre if socio.sucursal_id else None,
+            'autorizado_por': autorizador.nombre if autorizador else None,
         })
 
 
-class StatsView(APIView):
-    """Dashboard analytics: horarios concurridos + totales del gym."""
+class StatsView(SucursalScopedMixin, APIView):
+    """Dashboard analytics: horarios concurridos + totales.
+
+    Recepción ve los números de su sucursal; el dueño, los del gym completo, o los de
+    una sucursal concreta con ?sucursal=.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -141,10 +209,10 @@ class StatsView(APIView):
         hoy = timezone.localdate()
         inicio_mes = hoy.replace(day=1)
 
-        accesos_qs = Acceso.objects.filter(
+        accesos_qs = self.scope_sucursal(Acceso.objects.filter(
             socio__gym_id=gym_id,
             resultado='permitido',
-        )
+        ))
 
         por_hora = (
             accesos_qs

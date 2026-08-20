@@ -121,8 +121,8 @@ export default function Equipamiento() {
 
       {/* Modal */}
       {modal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <div className="rounded-2xl p-6 w-full max-w-md" style={CARD_STYLE}>
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-md my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-sm font-bold text-white">{form.id ? 'Editar ítem' : 'Añadir ítem'}</h2>
               <button onClick={() => setModal(false)} style={{ color: '#8b949e' }} className="hover:text-white">

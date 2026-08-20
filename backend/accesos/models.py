@@ -36,6 +36,8 @@ class Acceso(models.Model):
         ('sin_membresia', 'Sin Membresía'),
         ('clases_agotadas', 'Clases Agotadas'),
         ('suspendido', 'Suspendido'),
+        ('otra_sucursal', 'Pertenece a Otra Sucursal'),
+        ('ya_registrado', 'Ya Registró su Acceso Hoy'),
     ]
 
     socio = models.ForeignKey(Socio, on_delete=models.CASCADE, related_name='accesos')
@@ -49,6 +51,12 @@ class Acceso(models.Model):
     motivo_denegado = models.CharField(
         max_length=30, choices=MOTIVO_DENEGADO_CHOICES,
         null=True, blank=True
+    )
+    # Quién autorizó con su contraseña una entrada que de otro modo se habría negado
+    # (socio de otra sucursal). Nulo en los accesos normales.
+    autorizado_por = models.ForeignKey(
+        'usuarios.Usuario', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='accesos_autorizados'
     )
     timestamp = models.DateTimeField(auto_now_add=True)
 

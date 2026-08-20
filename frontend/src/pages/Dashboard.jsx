@@ -1,22 +1,19 @@
 import { useEffect, useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import api from '../api/axios'
+import SucursalSelector from '../components/SucursalSelector'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
+const INPUT_STYLE = { backgroundColor: '#0d1117', border: '1px solid #21262d', color: '#fff' }
 
-const HORAS_MOCK = [
-  { hora: '5am', v: 12 }, { hora: '6am', v: 28 }, { hora: '7am', v: 45 }, { hora: '8am', v: 98 },
-  { hora: '9am', v: 70 }, { hora: '10am', v: 62 }, { hora: '11am', v: 55 }, { hora: '12pm', v: 40 },
-  { hora: '1pm', v: 35 }, { hora: '2pm', v: 30 }, { hora: '3pm', v: 38 }, { hora: '4pm', v: 58 },
-  { hora: '5pm', v: 120 }, { hora: '6pm', v: 135 }, { hora: '7pm', v: 110 }, { hora: '8pm', v: 90 },
-  { hora: '9pm', v: 45 },
-]
-
-const PAGOS_MOCK = [
-  { id: 1, nombre: 'Carlos Mendoza', plan: 'Socio Regular', monto: 499, vence: '2025-07-05' },
-  { id: 2, nombre: 'Sofía Ramírez', plan: 'Socio Regular', monto: 499, vence: '2025-07-03' },
-  { id: 3, nombre: 'Rodrigo Quispe', plan: 'Socio Regular', monto: 499, vence: '2025-07-03' },
-]
+// Etiqueta de hora legible para el eje del gráfico y el "pico". `hora_pico` del
+// backend es un entero 0-23; se traduce aquí en vez de mandarlo ya formateado
+// porque el mismo número también hace falta crudo para ordenar y comparar.
+function horaLabel(h) {
+  if (h === 0) return '12am'
+  if (h === 12) return '12pm'
+  return h < 12 ? `${h}am` : `${h - 12}pm`
+}
 
 const CLASES_HOY_MOCK = [
   { nombre: 'Preparación Física', tipo: 'fisico', hora: '06:00-07:00', profesor: 'Miguel R.', ocupacion: 8, cupo: 16, estado: 'Completada' },
@@ -41,28 +38,69 @@ function avatarColor(name) { return AVATAR_COLORS[name.charCodeAt(0) % AVATAR_CO
 export default function Dashboard() {
   const [socios, setSocios] = useState([])
   const [accesos, setAccesos] = useState(null)
+  const [membresias, setMembresias] = useState([])
+  const [q, setQ] = useState('')
+  // 'semana' = promedio de los últimos 7 días (default); 'hoy' = solo las visitas
+  // de hoy. Ambos son datos reales del backend, no dos vistas del mismo mock.
+  const [rango, setRango] = useState('semana')
+
+  // El selector de sucursal manda '' o '?sucursal=N'; se le suma `rango` sin
+  // duplicar lógica de query-string.
+  const conRango = base => {
+    const params = new URLSearchParams(q.replace(/^\?/, ''))
+    params.set('rango', rango)
+    return `${base}?${params.toString()}`
+  }
 
   useEffect(() => {
     api.get('/socios/').then(r => setSocios(r.data)).catch(() => {})
-    api.get('/accesos/stats/').then(r => setAccesos(r.data)).catch(() => {})
-  }, [])
+    api.get(`/socios/membresias/${q}`).then(r => setMembresias(r.data)).catch(() => {})
+  }, [q])
+
+  useEffect(() => {
+    api.get(conRango('/accesos/stats/')).then(r => setAccesos(r.data)).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, rango])
 
   const sociosActivos = socios.filter(s => s.activo).length
+
+  // Vencidos hoy o en los últimos 7 días y todavía sin renovar: no "todo lo
+  // atrasado alguna vez" (eso ensuciaría la tarjeta con cobros ya resueltos hace
+  // meses), y no solo "vence hoy" (un pago de hace 3 días sigue pendiente).
+  const hoyISO = new Date().toISOString().slice(0, 10)
+  const haceSemanaISO = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10)
+  const pagosPendientes = membresias
+    .filter(m =>
+      m.estado === 'pendiente_pago' ||
+      (m.fecha_fin && m.fecha_fin <= hoyISO && m.fecha_fin >= haceSemanaISO && m.estado !== 'suspendida')
+    )
+    .sort((a, b) => (a.fecha_fin || '').localeCompare(b.fecha_fin || ''))
+  const vencenHoy = pagosPendientes.filter(m => m.fecha_fin === hoyISO)
+  const totalPendiente = pagosPendientes.reduce((s, m) => s + Number(m.plan_precio || 0), 0)
+
+  const datosAfluencia = (accesos?.horarios_concurridos || []).map(h => ({
+    hora: horaLabel(h.hora), v: h.promedio,
+  }))
+  const maxVisitantes = Math.max(0, ...datosAfluencia.map(d => d.v))
 
   const CustomTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null
     const v = payload[0].value
-    const color = v >= 85 ? '#22c55e' : v >= 50 ? '#86efac' : '#4ade80'
+    const color = v >= maxVisitantes * 0.7 ? '#22c55e' : v >= maxVisitantes * 0.4 ? '#86efac' : '#4ade80'
     return (
       <div className="px-3 py-2 rounded-lg text-xs" style={{ backgroundColor: '#1c2333', border: '1px solid #21262d', color: '#fff' }}>
         <p className="font-bold">{label}</p>
-        <p style={{ color }}>{v} visitantes</p>
+        <p style={{ color }}>{v} visitantes{rango === 'semana' ? ' (promedio)' : ''}</p>
       </div>
     )
   }
 
   return (
     <div className="space-y-5">
+      <div className="flex justify-end">
+        <SucursalSelector onChange={setQ} />
+      </div>
+
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-xl p-5 flex items-center gap-4" style={CARD_STYLE}>
@@ -124,72 +162,118 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Afluencia */}
         <div className="lg:col-span-2 rounded-xl p-5" style={CARD_STYLE}>
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <div className="flex items-center gap-2">
               <svg className="w-4 h-4 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <div>
                 <p className="text-sm font-bold text-white">Afluencia por Hora</p>
-                <p className="text-[10px]" style={{ color: '#8b949e' }}>Promedio de visitantes · Hoy</p>
+                <p className="text-[10px]" style={{ color: '#8b949e' }}>
+                  {rango === 'semana' ? 'Promedio de visitantes · últimos 7 días' : 'Visitantes · Hoy'}
+                </p>
               </div>
             </div>
-            <span className="text-xs text-[#22c55e] flex items-center gap-1">
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>
-              Pico: 6-7pm
-            </span>
+            <div className="flex items-center gap-2">
+              {accesos?.hora_pico != null && (
+                <span className="text-xs text-[#22c55e] flex items-center gap-1">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>
+                  Pico: {horaLabel(accesos.hora_pico)}
+                </span>
+              )}
+              <select
+                value={rango}
+                onChange={e => setRango(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-lg font-semibold outline-none"
+                style={INPUT_STYLE}
+              >
+                <option value="semana">Últimos 7 días</option>
+                <option value="hoy">Hoy</option>
+              </select>
+            </div>
           </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={HORAS_MOCK} barSize={14}>
-              <XAxis dataKey="hora" tick={{ fontSize: 10, fill: '#8b949e' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: '#8b949e' }} axisLine={false} tickLine={false} />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="v" radius={[3, 3, 0, 0]}>
-                {HORAS_MOCK.map((entry, i) => (
-                  <Cell key={i} fill={entry.v >= 85 ? '#22c55e' : entry.v >= 50 ? '#16a34a' : '#166534'} />
+          {datosAfluencia.length === 0 ? (
+            <div className="flex items-center justify-center" style={{ height: 200 }}>
+              <p className="text-xs" style={{ color: '#3d444d' }}>
+                {rango === 'semana' ? 'Sin accesos registrados en los últimos 7 días' : 'Sin accesos registrados hoy'}
+              </p>
+            </div>
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={datosAfluencia} barSize={14}>
+                  <XAxis dataKey="hora" tick={{ fontSize: 10, fill: '#8b949e' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 10, fill: '#8b949e' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="v" radius={[3, 3, 0, 0]}>
+                    {datosAfluencia.map((entry, i) => (
+                      <Cell key={i} fill={
+                        entry.v >= maxVisitantes * 0.7 ? '#22c55e'
+                          : entry.v >= maxVisitantes * 0.4 ? '#16a34a' : '#166534'
+                      } />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+              <div className="flex gap-4 mt-2">
+                {[['Alta', '#22c55e'], ['Media', '#16a34a'], ['Baja', '#166534']].map(([l, c]) => (
+                  <div key={l} className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: c }} />
+                    <span className="text-[10px]" style={{ color: '#8b949e' }}>{l}</span>
+                  </div>
                 ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-          <div className="flex gap-4 mt-2">
-            {[['Alta (+85)', '#22c55e'], ['Media (50-84)', '#16a34a'], ['Baja (-50)', '#166534']].map(([l, c]) => (
-              <div key={l} className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: c }} />
-                <span className="text-[10px]" style={{ color: '#8b949e' }}>{l}</span>
               </div>
-            ))}
-          </div>
+            </>
+          )}
         </div>
 
-        {/* Pagos pendientes */}
+        {/* Pagos pendientes: vencen hoy o vencieron en los últimos 7 días y siguen
+            sin renovarse. No es "todo lo atrasado alguna vez" (arrastraría cobros ya
+            resueltos hace meses) ni solo "vence hoy" (deja fuera al que debe desde
+            hace 3 días). */}
         <div className="rounded-xl p-5" style={CARD_STYLE}>
           <div className="flex items-center justify-between mb-4">
             <div>
               <p className="text-sm font-bold text-white">Pagos Pendientes</p>
-              <p className="text-[10px]" style={{ color: '#8b949e' }}>Vencen hoy</p>
+              <p className="text-[10px]" style={{ color: '#8b949e' }}>Hoy y últimos 7 días</p>
             </div>
-            <span className="text-[10px] px-2 py-0.5 rounded font-bold" style={{ backgroundColor: '#f9731620', color: '#f97316' }}>3 hoy</span>
+            <span className="text-[10px] px-2 py-0.5 rounded font-bold" style={{ backgroundColor: '#f9731620', color: '#f97316' }}>
+              {vencenHoy.length} hoy
+            </span>
           </div>
-          <div className="space-y-3">
-            {PAGOS_MOCK.map(p => (
-              <div key={p.id} className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
-                    style={{ backgroundColor: avatarColor(p.nombre), color: '#0d1117' }}>
-                    {initials(p.nombre)}
+          {pagosPendientes.length === 0 ? (
+            <p className="text-xs text-center py-6" style={{ color: '#3d444d' }}>Sin pagos pendientes</p>
+          ) : (
+            <div className="space-y-3">
+              {pagosPendientes.slice(0, 5).map(m => (
+                <div key={m.id} className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
+                      style={{ backgroundColor: avatarColor(m.socio_nombre), color: '#0d1117' }}>
+                      {initials(m.socio_nombre)}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-white truncate">{m.socio_nombre}</p>
+                      <p className="text-[10px]" style={{ color: '#8b949e' }}>
+                        {m.plan_nombre} · {m.fecha_fin === hoyISO ? 'vence hoy' : m.fecha_fin ? `venció ${m.fecha_fin}` : 'sin pagar'}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-xs font-semibold text-white">{p.nombre}</p>
-                    <p className="text-[10px]" style={{ color: '#8b949e' }}>{p.plan}</p>
-                  </div>
+                  <span className="text-xs font-bold shrink-0" style={{ color: '#f97316' }}>
+                    ${Number(m.plan_precio || 0).toLocaleString()}
+                  </span>
                 </div>
-                <span className="text-xs font-bold" style={{ color: '#f97316' }}>${p.monto.toLocaleString()}</span>
-              </div>
-            ))}
-          </div>
+              ))}
+              {pagosPendientes.length > 5 && (
+                <p className="text-[10px] text-center" style={{ color: '#3d444d' }}>
+                  +{pagosPendientes.length - 5} más
+                </p>
+              )}
+            </div>
+          )}
           <div className="mt-4 pt-3" style={{ borderTop: '1px solid #21262d' }}>
             <p className="text-xs" style={{ color: '#8b949e' }}>
-              Total hoy: <span className="font-bold" style={{ color: '#22c55e' }}>$1,497</span>
+              Total pendiente: <span className="font-bold" style={{ color: '#22c55e' }}>${totalPendiente.toLocaleString()}</span>
             </p>
           </div>
         </div>

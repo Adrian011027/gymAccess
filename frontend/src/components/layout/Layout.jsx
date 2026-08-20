@@ -3,6 +3,7 @@ import { Navigate, Outlet } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import Sidebar from './Sidebar'
 import Navbar from './Navbar'
+import AceptacionLegal from '../AceptacionLegal'
 
 export default function Layout() {
   const { user, loading } = useAuth()
@@ -18,6 +19,9 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen w-full overflow-hidden" style={{ backgroundColor: '#0d1117' }}>
+      {/* Va aquí y no en cada página: envuelve todas las rutas autenticadas, así que
+          no hay pantalla desde la que se pueda esquivar. */}
+      <AceptacionLegal />
       <Sidebar
         colapsado={colapsado}
         setColapsado={setColapsado}

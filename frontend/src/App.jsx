@@ -10,8 +10,12 @@ import Clases from './pages/Clases'
 import Equipamiento from './pages/Equipamiento'
 import Reportes from './pages/Reportes'
 import Pagos from './pages/Pagos'
+import POS from './pages/POS'
 import Configuracion from './pages/Configuracion'
 import Notificaciones from './pages/Notificaciones'
+import Empleados from './pages/Empleados'
+import Legal from './pages/Legal'
+import SeleccionarSucursal from './pages/SeleccionarSucursal'
 
 // El admin aterriza en el dashboard; recepción va directo al check-in.
 function HomeRedirect() {
@@ -38,18 +42,22 @@ export default function App() {
         />
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/seleccionar-sucursal" element={<SeleccionarSucursal />} />
           <Route element={<Layout />}>
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/checkin"      element={<CheckIn />} />
             <Route path="/socios"       element={<Socios />} />
             <Route path="/clases"       element={<Clases />} />
             <Route path="/pagos"        element={<Pagos />} />
+            <Route path="/pos"          element={<POS />} />
             <Route path="/notificaciones" element={<Notificaciones />} />
             <Route element={<AdminRoutes />}>
               <Route path="/dashboard"    element={<Dashboard />} />
               <Route path="/equipamiento" element={<Equipamiento />} />
               <Route path="/reportes"     element={<Reportes />} />
               <Route path="/configuracion" element={<Configuracion />} />
+              <Route path="/empleados"    element={<Empleados />} />
+              <Route path="/legal"        element={<Legal />} />
             </Route>
           </Route>
         </Routes>

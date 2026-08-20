@@ -98,6 +98,55 @@ class StatsEndpointTests(StatsBase):
                hora_local(HOY(), 19))
         self.assertEqual(self.client.get('/api/accesos/stats/').data['horarios_concurridos'], [])
 
+    def test_rango_default_es_semana(self):
+        self.assertEqual(self.client.get('/api/accesos/stats/').data['rango'], 'semana')
+
+    def test_semana_promedia_entre_7_dias(self):
+        """El default no es 'todo el historial': es una ventana fija de 7 días."""
+        for _ in range(7):
+            fechar(self.acceso(), hora_local(HOY(), 18))
+        data = self.client.get('/api/accesos/stats/').data
+        fila = next(h for h in data['horarios_concurridos'] if h['hora'] == 18)
+        self.assertEqual(fila['total'], 7)
+        self.assertEqual(fila['promedio'], 1.0)
+        self.assertEqual(data['dias_considerados'], 7)
+
+    def test_semana_excluye_accesos_de_hace_mas_de_7_dias(self):
+        viejo = self.acceso()
+        fechar(viejo, hora_local(HOY() - timedelta(days=8), 18))
+        data = self.client.get('/api/accesos/stats/').data
+        self.assertEqual(data['horarios_concurridos'], [])
+
+    def test_rango_hoy_no_promedia(self):
+        for _ in range(3):
+            fechar(self.acceso(), hora_local(HOY(), 19))
+        # Uno de ayer no debe contar en rango=hoy, y sí contaría en 'semana'.
+        fechar(self.acceso(), hora_local(HOY() - timedelta(days=1), 19))
+
+        data_hoy = self.client.get('/api/accesos/stats/?rango=hoy').data
+        fila_hoy = next(h for h in data_hoy['horarios_concurridos'] if h['hora'] == 19)
+        self.assertEqual(fila_hoy['total'], 3)
+        self.assertEqual(fila_hoy['promedio'], 3.0)
+        self.assertEqual(data_hoy['dias_considerados'], 1)
+
+        data_semana = self.client.get('/api/accesos/stats/?rango=semana').data
+        fila_semana = next(h for h in data_semana['horarios_concurridos'] if h['hora'] == 19)
+        self.assertEqual(fila_semana['total'], 4)
+
+    def test_rango_invalido_cae_a_semana(self):
+        self.assertEqual(
+            self.client.get('/api/accesos/stats/?rango=el-mes-pasado').data['rango'], 'semana',
+        )
+
+    def test_hora_pico_es_la_de_mayor_promedio(self):
+        for _ in range(5):
+            fechar(self.acceso(), hora_local(HOY(), 18))
+        fechar(self.acceso(), hora_local(HOY(), 7))
+        self.assertEqual(self.client.get('/api/accesos/stats/').data['hora_pico'], 18)
+
+    def test_hora_pico_null_sin_datos(self):
+        self.assertIsNone(self.client.get('/api/accesos/stats/').data['hora_pico'])
+
     def test_stats_scoped_al_gym(self):
         ajeno = Socio.objects.create(gym=self.otro_gym, nombre='Pedro', apellido='Ajeno')
         sucursal_ajena = Sucursal.objects.create(gym=self.otro_gym, nombre='Ajena')

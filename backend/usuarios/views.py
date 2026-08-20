@@ -1,10 +1,11 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .models import Usuario
-from .permissions import EsAdminGym
+from .permissions import ROLES_ADMIN, EsAdminGym
 from .serializers import UsuarioSerializer, LoginSerializer
 
 
@@ -25,15 +26,48 @@ class UsuarioViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        # Los dados de baja se ocultan: siguen en la base porque de ellos cuelga la
+        # bitácora (quién autorizó qué), pero no son personal en activo.
+        qs = Usuario.objects.filter(is_active=True)
+        if self.request.query_params.get('incluir_bajas') == '1':
+            qs = Usuario.objects.all()
         if user.rol == 'superadmin':
-            return Usuario.objects.all()
-        return Usuario.objects.filter(gym_id=user.gym_id)
+            return qs
+        return qs.filter(gym_id=user.gym_id)
 
     def perform_create(self, serializer):
         if self.request.user.rol != 'superadmin':
             serializer.save(gym_id=self.request.user.gym_id)
         else:
             serializer.save()
+
+    def perform_destroy(self, instance):
+        """Baja lógica del empleado.
+
+        No se borra la fila: `Pago.registrado_por`, `AjusteMembresia.autorizado_por` y
+        `Acceso.autorizado_por` apuntan aquí con SET_NULL, así que un DELETE real
+        dejaría la bitácora sin responsable justo en los movimientos que existen para
+        poder auditar a alguien. Desactivado no puede iniciar sesión, que es el efecto
+        que se busca.
+        """
+        usuario = self.request.user
+        if instance.id == usuario.id:
+            raise ValidationError(
+                {'detail': 'No puedes darte de baja a ti mismo. Pídeselo a otro admin.'}
+            )
+        if instance.rol in ROLES_ADMIN:
+            # Quedarse sin ningún admin deja el gym sin quien administre nada, y
+            # tampoco quien pueda reactivar al que se acaba de dar de baja.
+            quedan = Usuario.objects.filter(
+                gym_id=instance.gym_id, rol__in=ROLES_ADMIN, is_active=True,
+            ).exclude(id=instance.id).exists()
+            if not quedan:
+                raise ValidationError(
+                    {'detail': 'Es el último administrador del gym: nombra otro antes '
+                               'de darlo de baja.'}
+                )
+        instance.is_active = False
+        instance.save(update_fields=['is_active'])
 
     def get_permissions(self):
         # Cambiar de sucursal activa es sobre uno mismo, no un endpoint de admin:

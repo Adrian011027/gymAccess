@@ -239,7 +239,8 @@ class PoliticaVisitantesTests(BaseDosSucursales):
         self.assertEqual(acceso.resultado, 'denegado')
         self.assertEqual(acceso.motivo_denegado, 'otra_sucursal')
 
-    def test_autorizacion_niega_sin_password_pero_ofrece_el_override(self):
+    def test_autorizacion_niega_de_entrada_pero_ofrece_el_override(self):
+        """Sin pulsar 'Autorizar' la puerta sigue cerrada: la política no es 'libre'."""
         self.gym.politica_visitantes = 'autorizacion'
         self.gym.save()
         resp = self.checkin()
@@ -247,19 +248,37 @@ class PoliticaVisitantesTests(BaseDosSucursales):
         self.assertTrue(resp.data['requiere_autorizacion'])
         self.assertEqual(resp.data['sucursal_socio'], 'Centro')
 
-    def test_autorizacion_con_password_del_duenio_deja_entrar(self):
+    def test_autorizar_deja_entrar_y_registra_quien_lo_hizo(self):
+        """Un clic basta: no se pide contraseña.
+
+        El respaldo pasa a ser la bitácora, así que lo que importa es que el acceso
+        quede firmado por quien estaba en el mostrador. Si `autorizado_por` se
+        guardara nulo, la política sería indistinguible de 'libre'.
+        """
+        self.gym.politica_visitantes = 'autorizacion'
+        self.gym.save()
+        resp = self.checkin(autorizar=True)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.assertEqual(resp.data['autorizado_por'], self.recep_norte.nombre)
+        acceso = Acceso.objects.get(resultado='permitido')
+        self.assertEqual(acceso.autorizado_por_id, self.recep_norte.id)
+
+    def test_bloqueado_no_se_puede_forzar_con_autorizar(self):
+        """'Solo su sucursal' significa que no hay override que valga."""
+        self.gym.politica_visitantes = 'bloqueado'
+        self.gym.save()
+        resp = self.checkin(autorizar=True)
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(resp.data['requiere_autorizacion'])
+        self.assertEqual(
+            Acceso.objects.get(resultado='denegado').motivo_denegado, 'otra_sucursal',
+        )
+
+    def test_password_ya_no_autoriza_visita(self):
+        """Queda como guardia: el camino viejo por contraseña no debe seguir vivo."""
         self.gym.politica_visitantes = 'autorizacion'
         self.gym.save()
         resp = self.checkin(password='Passw0rd1')
-        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
-        self.assertEqual(resp.data['autorizado_por'], 'Admin')
-        acceso = Acceso.objects.get(resultado='permitido')
-        self.assertEqual(acceso.autorizado_por_id, self.duenio.id)
-
-    def test_password_de_recepcion_no_autoriza_visita(self):
-        self.gym.politica_visitantes = 'autorizacion'
-        self.gym.save()
-        resp = self.checkin(password='Passw0rd1XX')
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_socio_de_su_propia_sucursal_no_pide_nada(self):

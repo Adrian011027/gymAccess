@@ -1,3 +1,7 @@
+import random
+from datetime import timedelta
+
+from django.db import models
 from django.db.models import Count
 from django.db.models.functions import ExtractHour
 from django.utils import timezone
@@ -40,6 +44,48 @@ class MetodoAccesoViewSet(viewsets.ModelViewSet):
         return MetodoAcceso.objects.filter(socio__gym_id=self.request.user.gym_id)
 
 
+class AsignarQRView(APIView):
+    """Devuelve el código QR del socio, creándolo si todavía no tiene.
+
+    Los socios nuevos ya reciben uno al darse de alta (SocioViewSet.perform_create),
+    pero los que vienen de una carga anterior pueden no tenerlo, y sin código el
+    check-in del kiosco no puede identificarlos.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        socio_id = request.data.get('socio_id')
+        if not socio_id:
+            return Response(
+                {'socio_id': 'Indica el socio.'}, status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            socio = Socio.objects.get(id=socio_id, gym_id=request.user.gym_id)
+        except (Socio.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {'socio_id': 'Socio no encontrado.'}, status=status.HTTP_404_NOT_FOUND,
+            )
+
+        metodo = socio.metodos_acceso.filter(tipo='qr', activo=True).first()
+        if metodo:
+            return Response(MetodoAccesoSerializer(metodo).data, status=status.HTTP_200_OK)
+
+        # El token es único a nivel tabla: se reintenta ante una colisión del azar en
+        # vez de devolver un 500 por IntegrityError.
+        for _ in range(10):
+            token = f'R3B-QR-{socio.id:05d}-{random.randint(1000, 9999)}'
+            if not MetodoAcceso.objects.filter(token=token).exists():
+                metodo = MetodoAcceso.objects.create(socio=socio, tipo='qr', token=token)
+                return Response(
+                    MetodoAccesoSerializer(metodo).data, status=status.HTTP_201_CREATED,
+                )
+        return Response(
+            {'error': 'No se pudo generar un código único, intenta de nuevo.'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+
 class SincronizarHuellaView(APIView):
     """Recibe el template ya capturado/matcheado por el agente local (SDK del lector)
     y lo asocia al socio como MetodoAcceso tipo huella."""
@@ -75,6 +121,62 @@ class AccesoViewSet(SucursalScopedMixin, viewsets.ReadOnlyModelViewSet):
         return self.scope_sucursal(
             Acceso.objects.filter(socio__gym_id=self.request.user.gym_id)
         ).select_related('socio', 'sucursal').order_by('-timestamp')
+
+
+class BuscarSocioView(APIView):
+    """Busca socios por nombre para el check-in.
+
+    Existe porque el socio que olvidó su código bloqueaba la puerta: recepción no
+    tenía forma de identificarlo desde el kiosco y acababa entrando por la lista de
+    socios, donde no se puede registrar el acceso.
+
+    Devuelve el token del QR para que el alta del acceso siga pasando por el mismo
+    camino que un escaneo: así la política de sucursal, la vigencia y la bitácora se
+    aplican igual y no hay una segunda puerta con reglas propias.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'checkin'
+
+    def get(self, request):
+        termino = (request.query_params.get('q') or '').strip()
+        if len(termino) < 2:
+            return Response(
+                {'q': 'Escribe al menos 2 letras del nombre.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        qs = Socio.objects.filter(
+            gym_id=request.user.gym_id, activo=True,
+        ).select_related('sucursal').prefetch_related('metodos_acceso')
+
+        # Se busca sobre "nombre apellido" completo para que "juan perez" encuentre a
+        # Juan Pérez; palabra por palabra, porque nadie escribe el orden exacto.
+        for palabra in termino.split():
+            qs = qs.filter(
+                models.Q(nombre__icontains=palabra) | models.Q(apellido__icontains=palabra)
+            )
+
+        resultados = []
+        for socio in qs.order_by('nombre', 'apellido')[:15]:
+            metodo = next(
+                (m for m in socio.metodos_acceso.all() if m.tipo == 'qr' and m.activo), None,
+            )
+            membresia = Membresia.objects.vigentes().filter(socio=socio).first()
+            resultados.append({
+                'id': socio.id,
+                'nombre': f'{socio.nombre} {socio.apellido}',
+                'token': metodo.token if metodo else None,
+                'sucursal': socio.sucursal.nombre if socio.sucursal_id else None,
+                'sucursal_id': socio.sucursal_id,
+                # Se adelanta el estado para que recepción vea a quién va a rebotar la
+                # puerta antes de pulsar, en vez de descubrirlo con el socio enfrente.
+                'al_corriente': membresia is not None,
+                'plan': membresia.plan.nombre if membresia else None,
+                'vence': membresia.fecha_fin if membresia else None,
+            })
+        return Response(resultados)
 
 
 class CheckInView(APIView):
@@ -144,21 +246,55 @@ class CheckInView(APIView):
                 'motivo': 'membresía no activa',
             }, status=status.HTTP_403_FORBIDDEN)
 
+        # Un código solo abre la puerta una vez por día. Sin este límite, dos personas
+        # se reparten el QR de una sola membresía y ambas entran gratis: la segunda
+        # entrada del día es exactamente esa señal, la tenga quien la tenga en la mano.
+        # Se cuenta a nivel gym, no por sucursal: compartir el código entre dos locales
+        # distintos es el mismo abuso.
+        ya_entro_hoy = Acceso.objects.filter(
+            socio=socio, resultado='permitido', timestamp__date=timezone.localdate(),
+        ).exists()
+        if ya_entro_hoy:
+            Acceso.objects.create(
+                socio=socio,
+                sucursal=sucursal,
+                membresia=membresia,
+                metodo_usado=metodo.tipo,
+                resultado='denegado',
+                motivo_denegado='ya_registrado',
+            )
+            return Response({
+                'acceso': 'denegado',
+                'socio': f'{socio.nombre} {socio.apellido}',
+                'motivo': 'ya se registró su acceso hoy: no puede entrar dos veces el mismo día',
+            }, status=status.HTTP_403_FORBIDDEN)
+
         # El socio está al corriente, pero puede no ser de esta sucursal. Qué hacer en
         # ese caso lo decide el dueño en la configuración del gym: hay negocios donde
         # la membresía es de un local concreto y otros donde da igual.
+        # Un socio sin sucursal no se puede contrastar contra nada, así que la política
+        # no le aplica y entra a cualquier local aunque esté en 'bloqueado'. No se le
+        # cierra la puerta —serían altas viejas legítimas—, pero se marca en la
+        # respuesta para que recepción vea el hueco y le asigne sucursal.
+        sin_sucursal = socio.sucursal_id is None
         visitante = (
-            socio.sucursal_id is not None
+            not sin_sucursal
             and socio.sucursal_id != sucursal.id
         )
         autorizador = None
         if visitante:
             politica = socio.gym.politica_visitantes
             if politica != 'libre':
-                autorizador = autorizador_del_gym(
-                    request.user.gym_id, request.data.get('password'),
+                # Con 'autorizacion' basta con que quien está en el mostrador pulse
+                # "Autorizar": no se pide contraseña. Queda registrado quién lo hizo,
+                # así que el control es a posteriori (la bitácora), no en la puerta.
+                autoriza_ahora = (
+                    politica == 'autorizacion'
+                    and str(request.data.get('autorizar', '')).lower() in ('1', 'true', 'sí', 'si')
                 )
-                if politica == 'bloqueado' or autorizador is None:
+                if autoriza_ahora:
+                    autorizador = request.user
+                if politica == 'bloqueado' or not autoriza_ahora:
                     Acceso.objects.create(
                         socio=socio,
                         sucursal=sucursal,
@@ -191,16 +327,22 @@ class CheckInView(APIView):
             'plan': membresia.plan.nombre,
             'vence': membresia.fecha_fin,
             'visitante': visitante,
+            'sin_sucursal': sin_sucursal,
             'sucursal_socio': socio.sucursal.nombre if socio.sucursal_id else None,
             'autorizado_por': autorizador.nombre if autorizador else None,
         })
 
 
 class StatsView(SucursalScopedMixin, APIView):
-    """Dashboard analytics: horarios concurridos + totales.
+    """Dashboard analytics: afluencia por hora + totales.
 
     Recepción ve los números de su sucursal; el dueño, los del gym completo, o los de
     una sucursal concreta con ?sucursal=.
+
+    `?rango=hoy` cuenta solo las visitas de hoy. El default `semana` promedia una
+    ventana móvil de 7 días (hoy incluido) en vez de la semana de calendario, para
+    que el promedio no cambie de tamaño según qué día caiga "hoy" (un promedio de
+    "lunes a hoy-martes" con 2 días de datos mentiría más que uno de 7 días fijos).
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -214,19 +356,43 @@ class StatsView(SucursalScopedMixin, APIView):
             resultado='permitido',
         ))
 
-        por_hora = (
+        rango = request.query_params.get('rango')
+        if rango not in ('hoy', 'semana'):
+            rango = 'semana'
+
+        if rango == 'hoy':
+            desde, dias = hoy, 1
+        else:
+            desde, dias = hoy - timedelta(days=6), 7
+
+        por_hora_qs = (
             accesos_qs
+            .filter(timestamp__date__gte=desde, timestamp__date__lte=hoy)
             .annotate(hora=ExtractHour('timestamp'))
             .values('hora')
             .annotate(total=Count('id'))
             .order_by('hora')
+        )
+        # `total` es la suma cruda en la ventana (compatible con lo que ya leían los
+        # tests); `promedio` es lo que pinta la gráfica — en 'hoy' coincide con total
+        # porque dias=1, así que el frontend puede usar un solo campo sin ramificar.
+        horarios_concurridos = [
+            {'hora': h['hora'], 'total': h['total'], 'promedio': round(h['total'] / dias, 1)}
+            for h in por_hora_qs
+        ]
+        hora_pico = (
+            max(horarios_concurridos, key=lambda h: h['promedio'])['hora']
+            if horarios_concurridos else None
         )
 
         accesos_hoy = accesos_qs.filter(timestamp__date=hoy).count()
         accesos_mes = accesos_qs.filter(timestamp__date__gte=inicio_mes).count()
 
         return Response({
-            'horarios_concurridos': list(por_hora),
+            'horarios_concurridos': horarios_concurridos,
+            'rango': rango,
+            'dias_considerados': dias,
+            'hora_pico': hora_pico,
             'accesos_hoy': accesos_hoy,
             'accesos_mes': accesos_mes,
         })

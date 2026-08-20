@@ -37,6 +37,7 @@ class Acceso(models.Model):
         ('clases_agotadas', 'Clases Agotadas'),
         ('suspendido', 'Suspendido'),
         ('otra_sucursal', 'Pertenece a Otra Sucursal'),
+        ('ya_registrado', 'Ya Registró su Acceso Hoy'),
     ]
 
     socio = models.ForeignKey(Socio, on_delete=models.CASCADE, related_name='accesos')

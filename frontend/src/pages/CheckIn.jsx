@@ -17,8 +17,11 @@ export default function CheckIn() {
   const [hora, setHora]             = useState(new Date())
   // Visita de otra sucursal esperando que el dueño teclee su contraseña.
   const [visita, setVisita]         = useState(null)
-  const [visitaPass, setVisitaPass] = useState('')
   const [visitaError, setVisitaError] = useState('')
+  // Búsqueda por nombre para el socio que llegó sin su código.
+  const [busqueda, setBusqueda] = useState('')
+  const [candidatos, setCandidatos] = useState(null)
+  const [buscando, setBuscando] = useState(false)
   const inputRef = useRef(null)
   const resetTimer = useRef(null)
 
@@ -42,22 +45,45 @@ export default function CheckIn() {
   const limpiar = () => {
     setResult(null)
     setVisita(null)
-    setVisitaPass('')
     setVisitaError('')
+    setBusqueda('')
+    setCandidatos(null)
     if (!esTactil) inputRef.current?.focus()
   }
 
-  const enviar = async (codigo, password) => {
-    const body = { token: codigo, sucursal_id: sucursal }
-    if (password) body.password = password
-    const { data } = await api.post('/accesos/checkin/', body)
+  const buscarPorNombre = async e => {
+    e.preventDefault()
+    const q = busqueda.trim()
+    if (q.length < 2) return
+    setBuscando(true)
+    try {
+      const { data } = await api.get('/accesos/buscar-socio/', { params: { q } })
+      setCandidatos(data)
+    } catch {
+      setCandidatos([])
+    } finally {
+      setBuscando(false)
+    }
+  }
+
+  const enviar = async (codigo, extra) => {
+    const { data } = await api.post('/accesos/checkin/', {
+      token: codigo, sucursal_id: sucursal, ...extra,
+    })
     return data
   }
 
   const check = async e => {
     e.preventDefault()
     if (!token.trim()) return
-    const codigo = token.trim()
+    procesar(token.trim())
+  }
+
+  // El acceso siempre se registra con el token del QR, venga de un escaneo o de la
+  // búsqueda por nombre: una sola puerta, con las mismas reglas de sucursal y vigencia.
+  const procesar = async codigo => {
+    setCandidatos(null)
+    setBusqueda('')
     setLoading(true)
     clearTimeout(resetTimer.current)
     try {
@@ -85,23 +111,18 @@ export default function CheckIn() {
     }
   }
 
-  const autorizarVisita = async e => {
-    e.preventDefault()
+  // Un clic autoriza la visita: no se pide contraseña, el respaldo es la bitácora
+  // (el acceso queda con `autorizado_por` = quien pulsó).
+  const autorizarVisita = async () => {
     setLoading(true)
     setVisitaError('')
     try {
-      const data = await enviar(visita.token, visitaPass)
+      const data = await enviar(visita.token, { autorizar: true })
       setVisita(null)
-      setVisitaPass('')
       setResult({ ok: true, ...data })
       resetTimer.current = setTimeout(limpiar, RESET_MS)
-    } catch (err) {
-      setVisitaError(
-        err.response?.status === 403
-          ? 'Contraseña incorrecta.'
-          : 'No se pudo autorizar el acceso.'
-      )
-      setVisitaPass('')
+    } catch {
+      setVisitaError('No se pudo autorizar el acceso.')
     } finally {
       setLoading(false)
     }
@@ -183,7 +204,9 @@ export default function CheckIn() {
           </div>
         </form>
 
-        {/* Visitante de otra sucursal: el dueño decide */}
+        {/* Visitante de otra sucursal: el dueño decide. Va justo debajo del
+            formulario de código —no hasta el final de la página— porque es la
+            respuesta a lo que se acaba de escanear, no un aparte. */}
         {visita && (
           <div
             className="rounded-2xl p-6 sm:p-8 text-center"
@@ -198,18 +221,13 @@ export default function CheckIn() {
               Su membresía es de <span className="text-white font-semibold">{visita.sucursal_socio}</span>.
               Está al corriente, pero no pertenece a esta sucursal.
             </p>
-            <form onSubmit={autorizarVisita} className="mt-5 max-w-xs mx-auto space-y-3">
-              <input
-                type="password" required autoFocus autoComplete="off"
-                value={visitaPass}
-                onChange={e => { setVisitaPass(e.target.value); setVisitaError('') }}
-                placeholder="Contraseña del dueño"
-                className="w-full text-center text-sm rounded-lg px-3 py-2.5 outline-none text-white"
-                style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}
-              />
+            <div className="mt-5 max-w-xs mx-auto space-y-3">
               {visitaError && (
                 <p className="text-xs font-semibold" style={{ color: '#ef4444' }}>{visitaError}</p>
               )}
+              <p className="text-[10px]" style={{ color: '#8b949e' }}>
+                Quedará registrado que lo autorizaste tú.
+              </p>
               <div className="flex gap-2">
                 <button
                   type="button" onClick={limpiar}
@@ -219,65 +237,142 @@ export default function CheckIn() {
                   Negar acceso
                 </button>
                 <button
-                  type="submit" disabled={loading || !visitaPass}
+                  type="button" onClick={autorizarVisita} disabled={loading}
                   className="flex-1 py-2.5 rounded-lg text-xs font-bold disabled:opacity-40"
                   style={{ backgroundColor: '#f97316', color: '#0d1117' }}
                 >
-                  {loading ? 'Verificando…' : 'Autorizar entrada'}
+                  {loading ? 'Registrando…' : 'Autorizar entrada'}
                 </button>
               </div>
-            </form>
+            </div>
           </div>
         )}
 
-        {/* Resultado */}
-        {result && !visita && (
-          <div
-            className="rounded-2xl p-6 sm:p-8 text-center transition-all"
-            style={{
-              backgroundColor: result.ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
-              border: `2px solid ${result.ok ? '#22c55e' : '#ef4444'}`,
-            }}
-          >
-            {result.foto ? (
-              <img
-                src={result.foto}
-                alt=""
-                className="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-cover mx-auto mb-4"
-                style={{ border: `3px solid ${result.ok ? '#22c55e' : '#ef4444'}` }}
-              />
-            ) : (
-              <div className="text-6xl mb-3">{result.ok ? '✅' : '🚫'}</div>
-            )}
-            <p className="text-2xl sm:text-3xl font-black" style={{ color: result.ok ? '#22c55e' : '#ef4444' }}>
-              {result.ok ? 'BIENVENIDO' : 'ACCESO DENEGADO'}
+        {/* Resultado. Mismo criterio: entre el código y la búsqueda por nombre,
+            para que se vea sin bajar la página. Si el motivo es "otra sucursal" se
+            pinta ámbar en vez de rojo: no es un rechazo por fraude o vencimiento,
+            es un socio legítimo tocando la puerta equivocada. */}
+        {result && !visita && (() => {
+          const otraSucursal = !result.ok && result.motivo === 'pertenece a otra sucursal'
+          const acento = result.ok ? '#22c55e' : otraSucursal ? '#f97316' : '#ef4444'
+          const fondo = result.ok
+            ? 'rgba(34,197,94,0.08)'
+            : otraSucursal ? 'rgba(249,115,22,0.08)' : 'rgba(239,68,68,0.08)'
+          return (
+            <div
+              className="rounded-2xl p-6 sm:p-8 text-center transition-all"
+              style={{ backgroundColor: fondo, border: `2px solid ${acento}` }}
+            >
+              {result.foto ? (
+                <img
+                  src={result.foto}
+                  alt=""
+                  className="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-cover mx-auto mb-4"
+                  style={{ border: `3px solid ${acento}` }}
+                />
+              ) : (
+                <div className="text-6xl mb-3">{result.ok ? '✅' : '🚫'}</div>
+              )}
+              <p className="text-2xl sm:text-3xl font-black" style={{ color: acento }}>
+                {result.ok ? 'BIENVENIDO' : 'ACCESO DENEGADO'}
+              </p>
+              {result.socio && (
+                <p className="text-lg sm:text-xl font-bold text-white mt-2">{result.socio}</p>
+              )}
+              {result.ok ? (
+                <div className="mt-3 text-sm space-y-1" style={{ color: '#8b949e' }}>
+                  <p>Plan: <span className="text-white font-semibold">{result.plan}</span></p>
+                  <p>Vence: <span className="text-white font-semibold">{result.vence ?? 'Sin fecha límite'}</span></p>
+                  {result.visitante && (
+                    <p style={{ color: '#f97316' }}>
+                      Visita de <span className="font-semibold">{result.sucursal_socio}</span>
+                      {result.autorizado_por && ` · autorizó ${result.autorizado_por}`}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <p className="mt-3 text-sm font-semibold" style={{ color: acento }}>{result.motivo}</p>
+                  {result.sucursal_socio && (
+                    <p className="text-xs mt-1" style={{ color: '#8b949e' }}>
+                      Pertenece a {result.sucursal_socio}
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* Búsqueda por nombre: el socio que olvidó su código bloqueaba la fila,
+            porque desde el kiosco no había forma de identificarlo. */}
+        <div className="rounded-2xl p-4 sm:p-5" style={{ backgroundColor: '#161b22', border: '1px solid #21262d' }}>
+          <p className="text-[10px] font-bold tracking-widest mb-2" style={{ color: '#8b949e' }}>
+            ¿NO TRAE SU CÓDIGO? BÚSCALO POR NOMBRE
+          </p>
+          <form onSubmit={buscarPorNombre} className="flex gap-2">
+            <input
+              value={busqueda}
+              onChange={e => setBusqueda(e.target.value)}
+              placeholder="Nombre o apellido"
+              autoComplete="off"
+              className="flex-1 text-sm rounded-lg px-3 py-2.5 outline-none text-white placeholder:text-[#3d444d]"
+              style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}
+            />
+            <button
+              type="submit"
+              disabled={buscando || busqueda.trim().length < 2}
+              className="px-4 py-2.5 rounded-lg text-xs font-bold disabled:opacity-40"
+              style={{ backgroundColor: '#21262d', color: '#fff' }}
+            >
+              {buscando ? '...' : 'Buscar'}
+            </button>
+          </form>
+
+          {candidatos && candidatos.length === 0 && (
+            <p className="text-xs mt-3 text-center" style={{ color: '#3d444d' }}>
+              Ningún socio coincide con "{busqueda}"
             </p>
-            {result.socio && (
-              <p className="text-lg sm:text-xl font-bold text-white mt-2">{result.socio}</p>
-            )}
-            {result.ok ? (
-              <div className="mt-3 text-sm space-y-1" style={{ color: '#8b949e' }}>
-                <p>Plan: <span className="text-white font-semibold">{result.plan}</span></p>
-                <p>Vence: <span className="text-white font-semibold">{result.vence ?? 'Sin fecha límite'}</span></p>
-                {result.visitante && (
-                  <p style={{ color: '#f97316' }}>
-                    Visita de <span className="font-semibold">{result.sucursal_socio}</span>
-                    {result.autorizado_por && ` · autorizó ${result.autorizado_por}`}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <>
-                <p className="mt-3 text-sm font-semibold" style={{ color: '#ef4444' }}>{result.motivo}</p>
-                {result.sucursal_socio && (
-                  <p className="text-xs mt-1" style={{ color: '#8b949e' }}>
-                    Pertenece a {result.sucursal_socio}
-                  </p>
-                )}
-              </>
-            )}
-          </div>
-        )}
+          )}
+
+          {candidatos && candidatos.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {candidatos.map(c => (
+                <div key={c.id} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2.5"
+                  style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-white truncate">{c.nombre}</p>
+                    <p className="text-[10px] truncate" style={{ color: '#8b949e' }}>
+                      {c.sucursal || 'Sin sucursal asignada'}
+                      {c.al_corriente
+                        ? ` · ${c.plan}${c.vence ? ` hasta ${c.vence}` : ''}`
+                        : ' · sin membresía vigente'}
+                    </p>
+                  </div>
+                  {/* Sin código no hay con qué registrar la entrada; se dice en vez de
+                      ofrecer un botón que va a fallar. */}
+                  {c.token ? (
+                    <button
+                      onClick={() => procesar(c.token)}
+                      disabled={loading}
+                      className="px-3 py-2 rounded-lg text-[10px] font-bold shrink-0 disabled:opacity-40"
+                      style={{
+                        backgroundColor: c.al_corriente ? '#22c55e' : '#21262d',
+                        color: c.al_corriente ? '#0d1117' : '#8b949e',
+                      }}
+                    >
+                      Registrar entrada
+                    </button>
+                  ) : (
+                    <span className="text-[10px] shrink-0" style={{ color: '#f97316' }}>
+                      Sin código QR
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

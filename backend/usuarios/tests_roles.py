@@ -197,7 +197,7 @@ class GestionDeUsuariosTests(RolBase):
     def test_admin_crea_recepcionista_en_su_gym(self):
         resp = self.client.post('/api/usuarios/', {
             'email': 'nueva@round3.com', 'password': 'Passw0rd1',
-            'nombre': 'Nueva', 'rol': 'recepcion',
+            'nombre': 'Nueva', 'rol': 'recepcion', 'sucursal': self.sucursal.id,
         })
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         creado = Usuario.objects.get(email='nueva@round3.com')

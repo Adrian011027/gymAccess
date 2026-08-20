@@ -235,6 +235,22 @@ export default function POS() {
               ))}
             </div>
 
+            {/* Catálogo cargado pero inventario en cero: el POS parece roto porque
+                ningún producto se deja pulsar. Se dice cuál es el problema y dónde
+                se arregla, en vez de dejar una cuadrícula muerta. */}
+            {productos.length > 0 && productos.every(p => p.stock <= 0) && (
+              <div className="rounded-xl p-4 mb-3" style={{ backgroundColor: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.3)' }}>
+                <p className="text-xs font-bold" style={{ color: '#f97316' }}>
+                  Ningún producto tiene existencias en esta sucursal
+                </p>
+                <p className="text-[10px] mt-1 leading-relaxed" style={{ color: '#8b949e' }}>
+                  Por eso no se pueden agregar al carrito. {isAdmin
+                    ? 'Carga el inventario desde la pestaña Inventario: Editar → Existencias.'
+                    : 'Pídele al administrador que cargue el inventario.'}
+                </p>
+              </div>
+            )}
+
             <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
               {visibles.map(p => (
                 <button
@@ -248,8 +264,11 @@ export default function POS() {
                   <p className="text-[10px] mt-0.5" style={{ color: '#8b949e' }}>{CAT_LABEL[p.categoria]}</p>
                   <div className="flex items-baseline justify-between mt-2">
                     <span className="text-sm font-black" style={{ color: '#22c55e' }}>{money(p.precio)}</span>
-                    <span className="text-[10px] font-semibold" style={{ color: p.stock_bajo ? '#f97316' : '#8b949e' }}>
-                      {p.stock} pz
+                    {/* "0 pz" en gris no explicaba por qué el producto no responde
+                        al clic; dicho con todas sus letras, sí. */}
+                    <span className="text-[10px] font-semibold"
+                      style={{ color: p.stock <= 0 ? '#ef4444' : p.stock_bajo ? '#f97316' : '#8b949e' }}>
+                      {p.stock <= 0 ? 'SIN STOCK' : `${p.stock} pz`}
                     </span>
                   </div>
                 </button>
@@ -450,8 +469,8 @@ export default function POS() {
 
       {/* ---------------- MODAL PRODUCTO ---------------- */}
       {modal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <div className="rounded-2xl p-6 w-full max-w-md" style={CARD_STYLE}>
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-md my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-sm font-bold text-white">{form.id ? 'Editar producto' : 'Añadir producto'}</h2>
               <button onClick={() => setModal(false)} style={{ color: '#8b949e' }} className="hover:text-white">

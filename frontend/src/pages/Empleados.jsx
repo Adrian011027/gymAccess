@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import api from '../api/axios'
+import { useAuth } from '../context/AuthContext'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 const INPUT_STYLE = {
@@ -19,12 +20,19 @@ const USER_EMPTY = {
 }
 
 export default function Empleados() {
+  const { user } = useAuth()
   const [sucursales, setSucursales] = useState([])
   const [usuarios, setUsuarios] = useState([])
   const [gymReal, setGymReal] = useState(null)
   const [userModal, setUserModal] = useState(false)
   const [userForm, setUserForm] = useState(USER_EMPTY)
   const [guardando, setGuardando] = useState(false)
+  // Dar de baja a alguien no se deshace desde la interfaz, así que se pide escribir
+  // la palabra: un clic de más en el botón equivocado no debe bastar.
+  const [baja, setBaja] = useState(null)
+  const [bajaTexto, setBajaTexto] = useState('')
+  const [bajaError, setBajaError] = useState('')
+  const [bajaLoading, setBajaLoading] = useState(false)
 
   const cargarSucursales = () => api.get('/gyms/sucursales/').then(r => setSucursales(r.data)).catch(() => {})
   const cargarUsuarios = () => api.get('/usuarios/').then(r => setUsuarios(r.data)).catch(() => {})
@@ -44,6 +52,32 @@ export default function Empleados() {
 
   const abrirNuevo = () => { setUserForm(USER_EMPTY); setUserModal(true) }
 
+  const abrirBaja = u => {
+    setBaja(u)
+    setBajaTexto('')
+    setBajaError('')
+  }
+
+  const confirmarBaja = async e => {
+    e.preventDefault()
+    if (bajaTexto.trim().toLowerCase() !== 'eliminar') {
+      setBajaError('Escribe exactamente "eliminar" para confirmar.')
+      return
+    }
+    setBajaLoading(true)
+    setBajaError('')
+    try {
+      await api.delete(`/usuarios/${baja.id}/`)
+      toast.success(`${baja.nombre} fue dado de baja`)
+      setBaja(null)
+      cargarUsuarios()
+    } catch (err) {
+      setBajaError(err.response?.data?.detail || errorDe(err))
+    } finally {
+      setBajaLoading(false)
+    }
+  }
+
   const abrirEditar = u => {
     setUserForm({
       ...u,
@@ -54,6 +88,14 @@ export default function Empleados() {
     })
     setUserModal(true)
   }
+
+  // El dueño (admin) opera el negocio entero: sucursal nula es su valor correcto,
+  // no un olvido. Para el resto es obligatoria.
+  const esAdmin = userForm.rol === 'admin'
+  // Si marcó permitidas, la activa sale de ahí; si no marcó ninguna, de todas.
+  const opcionesSucursal = userForm.sucursales_permitidas.length
+    ? sucursales.filter(s => userForm.sucursales_permitidas.includes(s.id))
+    : sucursales
 
   const toggleSucursal = id => {
     setUserForm(f => {
@@ -132,9 +174,22 @@ export default function Empleados() {
                     : 'Todas'}
                 </span>
                 <button onClick={() => abrirEditar(u)}
-                  className="text-[10px] font-semibold" style={{ color: '#8b949e' }}>
+                  className="text-[10px] font-semibold hover:text-white transition-colors"
+                  style={{ color: '#8b949e' }}>
                   Editar
                 </button>
+                {/* Uno no puede darse de baja a sí mismo: se oculta en vez de
+                    dejar que lo intente y reciba un error. */}
+                {String(u.id) !== String(user?.user_id) && (
+                  <button onClick={() => abrirBaja(u)}
+                    title="Dar de baja"
+                    className="text-[10px] font-semibold transition-colors"
+                    style={{ color: '#8b949e' }}
+                    onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
+                    onMouseLeave={e => e.currentTarget.style.color = '#8b949e'}>
+                    Eliminar
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -144,9 +199,55 @@ export default function Empleados() {
         </div>
       </div>
 
+      {baja && (
+        <div className="fixed inset-0 flex items-center justify-center z-[60] p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.8)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-sm my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
+            <h2 className="text-sm font-bold text-white">Dar de baja a un empleado</h2>
+            <p className="text-xs mt-2 leading-relaxed" style={{ color: '#8b949e' }}>
+              <span className="text-white font-semibold">{baja.nombre}</span> dejará de
+              poder iniciar sesión de inmediato.
+            </p>
+            <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#8b949e' }}>
+              Su historial no se borra: los pagos que cobró y las autorizaciones que dio
+              siguen registrados a su nombre, o la bitácora se quedaría sin responsable.
+            </p>
+            <form onSubmit={confirmarBaja} className="space-y-3 mt-4">
+              <div>
+                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>
+                  ESCRIBE <span style={{ color: '#ef4444' }}>ELIMINAR</span> PARA CONFIRMAR
+                </label>
+                <input
+                  autoFocus autoComplete="off"
+                  value={bajaTexto}
+                  onChange={e => { setBajaTexto(e.target.value); setBajaError('') }}
+                  placeholder="eliminar"
+                  className="mt-1" style={INPUT_STYLE}
+                />
+              </div>
+              {bajaError && (
+                <p className="text-[11px] font-semibold" style={{ color: '#ef4444' }}>{bajaError}</p>
+              )}
+              <div className="flex gap-3 pt-1">
+                <button type="button" onClick={() => setBaja(null)}
+                  className="flex-1 py-2.5 rounded-lg text-xs font-semibold"
+                  style={{ border: '1px solid #21262d', color: '#8b949e', backgroundColor: 'transparent' }}>
+                  Cancelar
+                </button>
+                <button type="submit"
+                  disabled={bajaLoading || bajaTexto.trim().toLowerCase() !== 'eliminar'}
+                  className="flex-1 py-2.5 rounded-lg text-xs font-bold disabled:opacity-40"
+                  style={{ backgroundColor: '#ef4444', color: '#fff' }}>
+                  {bajaLoading ? 'Dando de baja...' : 'Eliminar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {userModal && (
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <div className="rounded-2xl p-6 w-full max-w-lg my-8" style={CARD_STYLE}>
+          <div className="rounded-2xl p-6 w-full max-w-lg my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
             <h2 className="text-sm font-bold text-white mb-5">
               {userForm.id ? 'Editar empleado' : 'Nuevo empleado'}
             </h2>
@@ -166,7 +267,12 @@ export default function Empleados() {
               <div>
                 <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>ROL</label>
                 <select value={userForm.rol}
-                  onChange={e => setUserForm(f => ({ ...f, rol: e.target.value }))}
+                  onChange={e => setUserForm(f => ({
+                    ...f, rol: e.target.value,
+                    // Un admin no se ata a una sucursal: si se cambia el rol a admin
+                    // se limpia, o quedaría viendo solo un local sin motivo.
+                    sucursal: e.target.value === 'admin' ? '' : f.sucursal,
+                  }))}
                   className="mt-1" style={INPUT_STYLE}>
                   <option value="recepcion">Recepción</option>
                   <option value="coach">Coach</option>
@@ -194,34 +300,48 @@ export default function Empleados() {
                     </label>
                   ))}
                 </div>
-                {userForm.sucursales_permitidas.length === 0 && (
-                  <p className="text-[10px] mt-1.5" style={{ color: '#f97316' }}>
-                    ⚠ Sin sucursales, este empleado verá los datos de todo el negocio.
-                  </p>
-                )}
+                <p className="text-[10px] mt-1.5" style={{ color: '#8b949e' }}>
+                  {userForm.sucursales_permitidas.length === 0
+                    ? 'Sin marcar ninguna, podrá elegir entre todas las sucursales.'
+                    : 'Entre estas podrá rotar al iniciar sesión.'}
+                </p>
               </div>
 
-              {userForm.sucursales_permitidas.length > 0 && (
+              {/* Siempre visible: antes solo aparecía si ya había permitidas marcadas,
+                  así que era fácil guardar a recepción sin sucursal — y sin sucursal
+                  ve los datos de todo el negocio. */}
+              {esAdmin || (
                 <div>
                   <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>
-                    SUCURSAL ACTIVA {userForm.sucursales_permitidas.length >= 2 && '(se puede cambiar al elegir en el login)'}
+                    SUCURSAL ACTIVA (EN LA QUE ESTÁ TRABAJANDO AHORA) <span style={{ color: '#f97316' }}>*</span>
                   </label>
-                  <select value={userForm.sucursal || ''}
+                  <select required value={userForm.sucursal || ''}
                     onChange={e => setUserForm(f => ({ ...f, sucursal: e.target.value }))}
                     className="mt-1" style={INPUT_STYLE}>
-                    <option value="">Sin elegir todavía</option>
-                    {sucursales.filter(s => userForm.sucursales_permitidas.includes(s.id)).map(s => (
+                    <option value="">Selecciona una sucursal</option>
+                    {opcionesSucursal.map(s => (
                       <option key={s.id} value={s.id}>{s.nombre}</option>
                     ))}
                   </select>
+                  <p className="text-[10px] mt-1.5 leading-relaxed" style={{ color: '#8b949e' }}>
+                    Es el local desde el que ve y registra datos ahora mismo: socios, caja,
+                    inventario y accesos son los de esta sucursal, no los de las otras.
+                    {userForm.sucursales_permitidas.length >= 2
+                      ? ' Como tiene varias permitidas, la cambia él mismo al iniciar sesión; aquí solo se deja preseleccionada.'
+                      : ' Con una sola sucursal permitida, siempre es esa.'}
+                  </p>
                 </div>
               )}
 
-              {userForm.sucursales_permitidas.length > 0 && (
+              {!esAdmin && (
                 <div>
                   <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>
-                    HORARIO (informativo)
+                    HORARIO SEMANAL (INFORMATIVO)
                   </label>
+                  <p className="text-[10px] mt-1 leading-relaxed" style={{ color: '#8b949e' }}>
+                    En qué sucursal le toca cada día. Es solo una referencia para el
+                    admin: no bloquea el acceso ni cambia la sucursal activa.
+                  </p>
                   <div className="rounded-lg overflow-hidden mt-1.5" style={{ border: '1px solid #21262d' }}>
                     {DIAS.map(([k, label], i) => (
                       <div key={k} className="flex items-center gap-2 px-3 py-2"
@@ -233,8 +353,8 @@ export default function Empleados() {
                           className="flex-1 text-xs px-2 py-1 rounded bg-transparent text-white outline-none"
                           style={{ border: '1px solid #21262d' }}
                         >
-                          <option value="">Libre</option>
-                          {sucursales.filter(s => userForm.sucursales_permitidas.includes(s.id)).map(s => (
+                          <option value="">Descanso — no trabaja</option>
+                          {opcionesSucursal.map(s => (
                             <option key={s.id} value={s.id}>{s.nombre}</option>
                           ))}
                         </select>

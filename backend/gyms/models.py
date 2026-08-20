@@ -13,7 +13,9 @@ class Gym(models.Model):
     # otros donde da lo mismo, así que lo decide el dueño.
     POLITICA_CHOICES = [
         ('libre', 'Puede entrar a cualquier sucursal'),
-        ('autorizacion', 'Requiere autorización del dueño'),
+        # No pide contraseña: quien está en el mostrador pulsa "Autorizar" y su
+        # nombre queda en la bitácora. El control es a posteriori, no en la puerta.
+        ('autorizacion', 'Recepción decide caso por caso'),
         ('bloqueado', 'Solo su sucursal'),
     ]
 
@@ -26,6 +28,14 @@ class Gym(models.Model):
         max_length=20, choices=POLITICA_CHOICES, default='libre',
         help_text='Qué hacer si un socio se presenta en una sucursal distinta a la suya',
     )
+    direccion = models.TextField(blank=True)
+    # Horario de atención por día, con los descansos (cierres parciales) dentro del
+    # turno. Estructura validada en GymSerializer:
+    #   {"lun": {"abierto": true, "inicio": "05:30", "fin": "22:00",
+    #            "descansos": [{"inicio": "13:00", "fin": "15:00"}]}, ...}
+    # Es JSON y no un modelo aparte porque se lee y se guarda siempre completo, como
+    # una sola preferencia del gym: siete filas nunca se consultan por separado.
+    horario = models.JSONField(default=dict, blank=True)
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
 

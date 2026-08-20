@@ -32,6 +32,11 @@ class Socio(models.Model):
     SEXO_CHOICES = [('M', 'Masculino'), ('F', 'Femenino'), ('O', 'Otro')]
 
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='socios')
+    # Consecutivo por gym, empieza en 1000 (SocioViewSet.perform_create lo asigna).
+    # Es el número que recepción dice en voz alta, se imprime y se busca a mano;
+    # a propósito NO es el código del QR: ese sigue con su parte aleatoria porque
+    # abre la puerta, y un consecutivo ahí se adivina probando números seguidos.
+    numero_socio = models.PositiveIntegerField(null=True, blank=True)
     # Dónde está registrado y dónde paga. El socio sigue siendo del gym: toda sucursal
     # puede verlo y atenderlo. Esto solo dice de dónde es, para poder reportarlo y para
     # que el check-in aplique la política de visitantes del gym.
@@ -46,14 +51,43 @@ class Socio(models.Model):
     fecha_nacimiento = models.DateField(null=True, blank=True)
     sexo = models.CharField(max_length=1, choices=SEXO_CHOICES, blank=True)
     foto = models.ImageField(upload_to='socios/fotos/', null=True, blank=True)
+    # Un menor no puede consentir el tratamiento de sus datos: lo hace quien ejerce
+    # la patria potestad. Se piden solo cuando la fecha de nacimiento dice que lo es
+    # (lo valida SocioSerializer), no a todo el mundo.
+    tutor_nombre = models.CharField(max_length=200, blank=True)
+    tutor_parentesco = models.CharField(max_length=50, blank=True)
+    tutor_telefono = models.CharField(max_length=20, blank=True)
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
+    # Fecha en que se ejerció el derecho de cancelación (ARCO). Los datos personales
+    # se borran, pero el registro sobrevive anonimizado porque de él cuelgan pagos
+    # que la obligación fiscal manda conservar.
+    anonimizado_en = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'socios'
+        constraints = [
+            # Nulo (registros de antes de esta migración sin backfill) no choca
+            # consigo mismo: SQL trata cada NULL como distinto de los demás.
+            models.UniqueConstraint(fields=['gym', 'numero_socio'], name='numero_socio_unico_por_gym'),
+        ]
 
     def __str__(self):
         return f'{self.nombre} {self.apellido}'
+
+    def edad(self, hoy=None):
+        """Edad en años cumplidos, o None si no se capturó la fecha."""
+        if not self.fecha_nacimiento:
+            return None
+        hoy = hoy or timezone.localdate()
+        nac = self.fecha_nacimiento
+        return hoy.year - nac.year - ((hoy.month, hoy.day) < (nac.month, nac.day))
+
+    @property
+    def es_menor(self):
+        """None cuando no hay fecha: no se puede afirmar ni que sí ni que no."""
+        edad = self.edad()
+        return None if edad is None else edad < 18
 
 
 class MembresiaQuerySet(models.QuerySet):

@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'accesos',
     'notificaciones',
     'tienda',
+    'legal',
 ]
 
 MIDDLEWARE = [

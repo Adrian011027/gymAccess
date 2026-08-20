@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import Usuario
+from .permissions import ROLES_ADMIN
 
 
 class LoginSerializer(TokenObtainPairSerializer):
@@ -61,6 +62,32 @@ class UsuarioSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'sucursal': 'La sucursal activa debe ser una de las permitidas.'}
             )
+
+        # Sin sucursal, el scoping (usuarios/scoping.py) no acota nada y el empleado
+        # ve la caja, los socios y el inventario del negocio entero. Es el default
+        # correcto para el dueño y una fuga para recepción, así que se exige.
+        #
+        # Solo se exige al crear o cuando la petición toca el rol o la sucursal: un
+        # empleado antiguo que quedó sin sucursal debe poder seguir editándose (una
+        # contraseña, una baja) en vez de quedar bloqueado por un hueco que no se
+        # está tocando y que solo se puede cerrar guardando ese mismo formulario.
+        rol = attrs.get('rol', getattr(self.instance, 'rol', None))
+        toca_asignacion = 'rol' in attrs or 'sucursal' in attrs
+        if (self.instance is None or toca_asignacion) and rol not in ROLES_ADMIN and sucursal is None:
+            raise serializers.ValidationError(
+                {'sucursal': 'Asigna la sucursal en la que trabaja: sin ella vería los '
+                             'datos de todas las sucursales.'}
+            )
+
+        # Con sucursal asignada pero sin permitidas explícitas, se toma la suya como
+        # la única. Deja el dato coherente: "dónde puede trabajar" nunca queda vacío
+        # mientras "dónde trabaja ahora" tiene valor.
+        if sucursal is not None and not permitidas_ids and 'sucursales_permitidas' not in attrs:
+            attrs['sucursales_permitidas'] = [sucursal]
+            # El horario se valida más abajo contra este conjunto: sin recalcularlo,
+            # asignar un día a la sucursal recién tomada por defecto daría "sucursal
+            # no permitida" contra la suya propia.
+            permitidas_ids = {sucursal.id}
 
         horario = attrs.get('horario_semanal')
         if horario:

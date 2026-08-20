@@ -14,6 +14,7 @@ import POS from './pages/POS'
 import Configuracion from './pages/Configuracion'
 import Notificaciones from './pages/Notificaciones'
 import Empleados from './pages/Empleados'
+import Legal from './pages/Legal'
 import SeleccionarSucursal from './pages/SeleccionarSucursal'
 
 // El admin aterriza en el dashboard; recepción va directo al check-in.
@@ -56,6 +57,7 @@ export default function App() {
               <Route path="/reportes"     element={<Reportes />} />
               <Route path="/configuracion" element={<Configuracion />} />
               <Route path="/empleados"    element={<Empleados />} />
+              <Route path="/legal"        element={<Legal />} />
             </Route>
           </Route>
         </Routes>

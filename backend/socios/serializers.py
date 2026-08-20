@@ -13,11 +13,90 @@ class SocioSerializer(serializers.ModelSerializer):
     membresia_reciente = serializers.SerializerMethodField()
     codigo_acceso = serializers.SerializerMethodField()
     sucursal_nombre = serializers.CharField(source='sucursal.nombre', read_only=True)
+    edad = serializers.SerializerMethodField()
+    es_menor = serializers.SerializerMethodField()
+    consentimiento = serializers.SerializerMethodField()
+    # No es campo del modelo: es la casilla que marca recepción en el alta. Se valida
+    # en SocioViewSet.perform_create, que es donde se sabe si hay aviso publicado.
+    acepta_aviso = serializers.BooleanField(write_only=True, required=False, default=False)
 
     class Meta:
         model = Socio
         fields = '__all__'
         extra_kwargs = {'gym': {'required': False}}
+        read_only_fields = ['anonimizado_en', 'numero_socio']
+
+    def get_validators(self):
+        # `numero_socio` tiene un UniqueConstraint(gym, numero_socio) en el modelo.
+        # DRF genera solo de eso un validador que exige "gym" en el body aunque el
+        # campo esté marcado required=False —un efecto colateral conocido de
+        # unique_together/UniqueConstraint en DRF, no una regla que se haya pedido—.
+        # numero_socio nunca llega del cliente (SocioViewSet.perform_create lo asigna
+        # siempre), así que ese validador no tiene nada que comprobar aquí: se filtra
+        # para que el alta normal (sin "gym" en el body) siga funcionando.
+        return [
+            v for v in super().get_validators()
+            if 'numero_socio' not in getattr(v, 'fields', ())
+        ]
+
+    def get_edad(self, obj):
+        return obj.edad()
+
+    def get_es_menor(self, obj):
+        return obj.es_menor
+
+    def get_consentimiento(self, obj):
+        """Última evidencia de aceptación del aviso, o None si nunca aceptó.
+
+        Va en el listado para que se vea de un vistazo a quién le falta: un socio
+        sin consentimiento es un hueco que hay que cerrar, no un detalle.
+        """
+        c = obj.consentimientos.order_by('-aceptado_en').first()
+        if not c:
+            return None
+        return {
+            'version': c.documento.version,
+            'aceptado_en': c.aceptado_en,
+            'otorgado_por': c.otorgado_por,
+        }
+
+    def validate(self, attrs):
+        """Un socio menor de edad necesita tutor identificado.
+
+        Quien no puede consentir por sí mismo tampoco puede quedar registrado sin
+        alguien que responda por él, así que el dato se exige en el alta y no
+        "cuando se pueda".
+        """
+        instancia = self.instance
+        nacimiento = attrs.get(
+            'fecha_nacimiento', getattr(instancia, 'fecha_nacimiento', None),
+        )
+        if not nacimiento:
+            return attrs
+
+        from django.utils import timezone
+        hoy = timezone.localdate()
+        edad = hoy.year - nacimiento.year - (
+            (hoy.month, hoy.day) < (nacimiento.month, nacimiento.day)
+        )
+        if nacimiento > hoy:
+            raise serializers.ValidationError(
+                {'fecha_nacimiento': 'La fecha de nacimiento no puede ser futura.'}
+            )
+        if edad >= 18:
+            return attrs
+
+        faltantes = {}
+        for campo, etiqueta in (
+            ('tutor_nombre', 'nombre del padre, madre o tutor'),
+            ('tutor_telefono', 'teléfono del tutor'),
+        ):
+            valor = attrs.get(campo, getattr(instancia, campo, '') or '')
+            if not str(valor).strip():
+                faltantes[campo] = f'El socio es menor de edad: falta el {etiqueta}.'
+        if faltantes:
+            raise serializers.ValidationError(faltantes)
+        return attrs
 
     def get_codigo_acceso(self, obj):
         m = next((m for m in obj.metodos_acceso.all() if m.activo), None)

@@ -45,7 +45,12 @@ class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
             gym_id=self.request.user.gym_id
         ).select_related('sucursal').prefetch_related('metodos_acceso')
 
+    @transaction.atomic
     def perform_create(self, serializer):
+        # Atómico porque el consentimiento se valida después de tener el socio (hace
+        # falta su gym y su edad para saber qué exigir). Sin esto, un alta sin la
+        # casilla marcada devolvía 400 pero dejaba el socio ya creado.
+        acepta_aviso = serializer.validated_data.pop('acepta_aviso', False)
         gym_id = self.request.user.gym_id
         if not gym_id:
             # Un superadmin sin gym debe decir explícitamente en qué gym da de alta;
@@ -57,10 +62,22 @@ class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
                 )
             gym_id = gym.id
         # Un socio dado de alta en una caja se registra en esa sucursal salvo que
-        # indiquen otra. El dueño (sin sucursal) sí puede elegirla.
+        # indiquen otra. El dueño (sin sucursal) sí puede elegirla; recepción no puede
+        # darlo de alta en el local de al lado ahora que el alta expone el campo.
+        self.validar_escritura(serializer.validated_data.get('sucursal'))
         extra = {}
         if serializer.validated_data.get('sucursal') is None and self.sucursal_id:
             extra['sucursal_id'] = self.sucursal_id
+        # `select_for_update` serializa a los que compiten por el mismo consecutivo
+        # (en SQLite es inerte, pero deja el código correcto para cuando el gym pase
+        # a Postgres). El registro nunca revienta por choque: se sirve un número por
+        # vez dentro de esta transacción.
+        ultimo = (
+            Socio.objects.select_for_update()
+            .filter(gym_id=gym_id)
+            .aggregate(m=models.Max('numero_socio'))['m']
+        )
+        extra['numero_socio'] = (ultimo or 999) + 1
         socio = serializer.save(gym_id=gym_id, **extra)
         # Cada socio nuevo recibe su código de acceso automáticamente
         MetodoAcceso.objects.create(
@@ -68,6 +85,147 @@ class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
             tipo='qr',
             token=f'R3B-QR-{socio.id:05d}-{random.randint(1000, 9999)}',
         )
+        self.registrar_consentimiento(socio, acepta_aviso)
+
+    def registrar_consentimiento(self, socio, acepta_aviso):
+        """Guarda la evidencia de que el socio aceptó el aviso de privacidad vigente.
+
+        Solo se exige si el gym ya publicó uno: no se puede consentir un documento
+        que no existe, y obligarlo antes dejaría el alta bloqueada sin salida.
+        """
+        from legal.models import ConsentimientoSocio, DocumentoLegal
+        from legal.views import ip_de
+
+        aviso = DocumentoLegal.vigente(DocumentoLegal.AVISO_PRIVACIDAD, socio.gym_id)
+        if not aviso:
+            return
+        if not acepta_aviso:
+            raise ValidationError({
+                'acepta_aviso': 'Falta la aceptación del aviso de privacidad por parte '
+                                'del socio o de su tutor.',
+            })
+        ConsentimientoSocio.objects.create(
+            socio=socio,
+            documento=aviso,
+            otorgado_por='tutor' if socio.es_menor else 'socio',
+            medio='mostrador',
+            tutor_nombre=socio.tutor_nombre,
+            tutor_parentesco=socio.tutor_parentesco,
+            ip=ip_de(self.request),
+            capturado_por=self.request.user,
+        )
+
+    def perform_update(self, serializer):
+        serializer.validated_data.pop('acepta_aviso', None)
+        if 'sucursal' in serializer.validated_data:
+            self.validar_escritura(serializer.validated_data.get('sucursal'))
+        serializer.save()
+
+    # --- Derechos ARCO (LFPDPPP) -------------------------------------------------
+    # El socio puede pedir ver sus datos y pedir que se borren. La ley da 20 días
+    # hábiles para responder; atenderlo a mano sobre la base de datos es lento y
+    # propenso a dejarse cosas fuera, así que se resuelve desde el sistema.
+
+    @action(detail=True, methods=['get'], url_path='datos-personales',
+            permission_classes=[permissions.IsAuthenticated, EsAdminGym])
+    def datos_personales(self, request, pk=None):
+        """Acceso: todo lo que el gym guarda de este socio, en un solo documento."""
+        socio = self.get_object()
+        return Response({
+            'generado_en': timezone.now(),
+            'identificacion': {
+                'nombre': socio.nombre,
+                'apellido': socio.apellido,
+                'email': socio.email,
+                'telefono': socio.telefono,
+                'fecha_nacimiento': socio.fecha_nacimiento,
+                'edad': socio.edad(),
+                'sexo': socio.get_sexo_display() if socio.sexo else None,
+                'foto': socio.foto.url if socio.foto else None,
+                'sucursal': socio.sucursal.nombre if socio.sucursal else None,
+                'alta': socio.creado_en,
+                'activo': socio.activo,
+            },
+            'tutor': {
+                'nombre': socio.tutor_nombre,
+                'parentesco': socio.tutor_parentesco,
+                'telefono': socio.tutor_telefono,
+            } if socio.tutor_nombre else None,
+            'metodos_acceso': [
+                {'tipo': m.get_tipo_display(), 'activo': m.activo, 'alta': m.creado_en}
+                for m in socio.metodos_acceso.all()
+            ],
+            'membresias': [
+                {
+                    'plan': m.plan.nombre, 'sucursal': m.sucursal.nombre,
+                    'inicio': m.fecha_inicio, 'fin': m.fecha_fin, 'estado': m.estado,
+                }
+                for m in socio.membresias.select_related('plan', 'sucursal')
+            ],
+            'pagos': [
+                {'monto': p.monto, 'metodo': p.get_metodo_display(), 'fecha': p.fecha}
+                for m in socio.membresias.all() for p in m.pagos.all()
+            ],
+            'accesos': [
+                {'sucursal': a.sucursal.nombre, 'resultado': a.resultado, 'fecha': a.timestamp}
+                for a in socio.accesos.select_related('sucursal').order_by('-timestamp')[:500]
+            ],
+            'consentimientos': [
+                {
+                    'documento': c.documento.titulo, 'version': c.documento.version,
+                    'aceptado_en': c.aceptado_en, 'otorgado_por': c.get_otorgado_por_display(),
+                }
+                for c in socio.consentimientos.select_related('documento')
+            ],
+        })
+
+    @action(detail=True, methods=['post'], url_path='cancelar-datos',
+            permission_classes=[permissions.IsAuthenticated, EsAdminGym])
+    def cancelar_datos(self, request, pk=None):
+        """Cancelación: borra los datos personales y conserva el histórico anonimizado.
+
+        No se elimina la fila: de ella cuelgan pagos que la obligación fiscal manda
+        conservar (CFF art. 30, cinco años). Borrar el socio arrastraría los pagos por
+        cascada y descuadraría la contabilidad, así que se vacía lo que identifica a la
+        persona y se deja el registro contable en pie.
+
+        Exige la contraseña de un admin aunque quien la pida ya lo sea: es
+        irreversible y la sesión abierta en el mostrador es el riesgo real.
+        """
+        from accesos.views import autorizador_del_gym
+
+        socio = self.get_object()
+        if socio.anonimizado_en:
+            raise ValidationError({'socio': 'Los datos de este socio ya fueron cancelados.'})
+
+        autorizador = autorizador_del_gym(request.user.gym_id, request.data.get('password'))
+        if autorizador is None:
+            raise PermissionDenied('Contraseña de autorización incorrecta.')
+
+        with transaction.atomic():
+            socio.nombre = 'Socio'
+            socio.apellido = f'cancelado #{socio.id}'
+            socio.email = ''
+            socio.telefono = ''
+            socio.fecha_nacimiento = None
+            socio.sexo = ''
+            socio.tutor_nombre = ''
+            socio.tutor_parentesco = ''
+            socio.tutor_telefono = ''
+            if socio.foto:
+                socio.foto.delete(save=False)
+            socio.activo = False
+            socio.anonimizado_en = timezone.now()
+            socio.save()
+            # El QR deja de abrir la puerta, pero la bitácora de accesos se conserva:
+            # es registro de quién entró al local, no un dato de contacto.
+            socio.metodos_acceso.update(activo=False)
+
+        return Response({
+            'socio': SocioSerializer(socio).data,
+            'anonimizado_en': socio.anonimizado_en,
+            'autorizado_por': autorizador.nombre,
+        }, status=status.HTTP_200_OK)
 
 
 class MembresiaViewSet(SucursalScopedMixin, viewsets.ModelViewSet):

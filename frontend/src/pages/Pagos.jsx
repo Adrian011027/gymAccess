@@ -339,8 +339,8 @@ export default function Pagos() {
       )}
 
       {confirmar && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <div className="rounded-2xl p-6 w-full max-w-sm" style={CARD_STYLE}>
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-sm my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
             <h2 className="text-sm font-bold text-white mb-1">Confirmar pago</h2>
             <p className="text-xs mb-5" style={{ color: '#8b949e' }}>
               {confirmar.socio_nombre} · {confirmar.plan_nombre}
@@ -397,8 +397,8 @@ export default function Pagos() {
       )}
 
       {gastoModal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <div className="rounded-2xl p-6 w-full max-w-sm" style={CARD_STYLE}>
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-sm my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
             <h2 className="text-sm font-bold text-white mb-5">Registrar gasto</h2>
             <form onSubmit={guardarGasto} className="space-y-3">
               <div>

@@ -33,9 +33,35 @@ function horarioDefault() {
   const h = {}
   for (const [k] of DIAS) {
     const finde = k === 'sab' || k === 'dom'
-    h[k] = { abierto: true, inicio: finde ? '07:00' : '05:30', fin: finde ? (k === 'dom' ? '14:00' : '18:00') : '22:00' }
+    h[k] = {
+      abierto: true,
+      inicio: finde ? '07:00' : '05:30',
+      fin: finde ? (k === 'dom' ? '14:00' : '18:00') : '22:00',
+      descansos: [],
+    }
   }
   return h
+}
+
+// El backend puede devolver días sin `descansos` (horarios guardados antes de que
+// existieran) o el objeto vacío si nunca se guardó nada: se completa contra el
+// default para que la UI nunca lea `undefined.map`.
+function normalizarHorario(guardado) {
+  const base = horarioDefault()
+  if (!guardado || typeof guardado !== 'object') return base
+  const h = {}
+  for (const [k] of DIAS) {
+    const d = guardado[k]
+    h[k] = d
+      ? { ...base[k], ...d, descansos: Array.isArray(d.descansos) ? d.descansos : [] }
+      : base[k]
+  }
+  return h
+}
+
+function textoDescansos(d) {
+  if (!d.descansos?.length) return ''
+  return ` (cierra ${d.descansos.map(x => `${x.inicio}-${x.fin}`).join(' y ')})`
 }
 
 function formatearHorario(h) {
@@ -47,29 +73,60 @@ function formatearHorario(h) {
   for (const [k, label] of DIAS) {
     const d = h[k]
     if (!d?.abierto) { actual = null; continue }
-    const key = `${d.inicio}-${d.fin}`
+    // Los descansos entran en la clave: dos días con el mismo turno pero distinto
+    // cierre parcial no son el mismo horario y no deben agruparse.
+    const key = `${d.inicio}-${d.fin}${textoDescansos(d)}`
     if (actual && actual.key === key) {
       actual.hasta = label
     } else {
-      actual = { desde: label, hasta: label, key, inicio: d.inicio, fin: d.fin }
+      actual = { desde: label, hasta: label, key, inicio: d.inicio, fin: d.fin, dia: d }
       grupos.push(actual)
     }
   }
   return grupos
-    .map(g => `${g.desde === g.hasta ? g.desde : `${g.desde}-${g.hasta}`} ${g.inicio}-${g.fin}`)
+    .map(g => `${g.desde === g.hasta ? g.desde : `${g.desde}-${g.hasta}`} ${g.inicio}-${g.fin}${textoDescansos(g.dia)}`)
     .join(' · ')
 }
 
 export default function Configuracion() {
-  const [gym, setGym] = useState({
-    nombre: 'Round3Boxing',
-    direccion: 'Av. Principal 420, Col. Centro',
-    telefono: '+52 55 1234 5678',
-    email: 'admin@round3boxing.com',
-  })
+  const [gym, setGym] = useState({ nombre: '', direccion: '', telefono: '', email: '' })
   const [horario, setHorario] = useState(horarioDefault())
+  const [guardandoGym, setGuardandoGym] = useState(false)
 
   const setDia = (dia, campo, valor) => setHorario(h => ({ ...h, [dia]: { ...h[dia], [campo]: valor } }))
+
+  const setDescanso = (dia, i, campo, valor) => setHorario(h => ({
+    ...h,
+    [dia]: {
+      ...h[dia],
+      descansos: h[dia].descansos.map((d, j) => (j === i ? { ...d, [campo]: valor } : d)),
+    },
+  }))
+
+  const agregarDescanso = dia => setHorario(h => {
+    const d = h[dia]
+    // Arranca a media mañana dentro del turno para que el descanso propuesto sea
+    // válido de entrada; el backend rechaza los que caen fuera del horario.
+    const [hi, mi] = d.inicio.split(':').map(Number)
+    const [hf] = d.fin.split(':').map(Number)
+    const centro = Math.min(Math.max(hi + 1, Math.floor((hi + hf) / 2)), hf - 1)
+    const dos = ('' + Math.min(centro + 1, hf)).padStart(2, '0')
+    return {
+      ...h,
+      [dia]: {
+        ...d,
+        descansos: [
+          ...d.descansos,
+          { inicio: `${('' + centro).padStart(2, '0')}:${('' + mi).padStart(2, '0')}`, fin: `${dos}:${('' + mi).padStart(2, '0')}` },
+        ],
+      },
+    }
+  })
+
+  const quitarDescanso = (dia, i) => setHorario(h => ({
+    ...h,
+    [dia]: { ...h[dia], descansos: h[dia].descansos.filter((_, j) => j !== i) },
+  }))
 
   const [notif, setNotif] = useState({
     pagos_vencidos: true,
@@ -78,9 +135,25 @@ export default function Configuracion() {
     reporte_semanal: true,
   })
 
-  const guardar = e => {
+  const guardar = async e => {
     e.preventDefault()
-    toast.success('Configuración guardada')
+    if (!gymReal) return toast.error('No se pudo cargar el gym')
+    setGuardandoGym(true)
+    try {
+      const { data } = await api.patch(`/gyms/${gymReal.id}/`, {
+        nombre: gym.nombre,
+        direccion: gym.direccion,
+        telefono: gym.telefono,
+        email_contacto: gym.email,
+        horario,
+      })
+      setGymReal(data)
+      toast.success('Configuración guardada')
+    } catch (err) {
+      toast.error(errorDe(err))
+    } finally {
+      setGuardandoGym(false)
+    }
   }
 
   const TIPO_CHOICES = [
@@ -111,7 +184,20 @@ export default function Configuracion() {
   const [guardando, setGuardando] = useState(false)
 
   const cargarSucursales = () => api.get('/gyms/sucursales/').then(r => setSucursales(r.data)).catch(() => {})
-  const cargarGym = () => api.get('/gyms/').then(r => setGymReal(r.data[0] || null)).catch(() => {})
+  const cargarGym = () => api.get('/gyms/').then(r => {
+    const g = r.data[0] || null
+    setGymReal(g)
+    if (!g) return
+    // Los valores del formulario salen del gym real; antes eran constantes escritas
+    // a mano, así que la pantalla mostraba datos de otro negocio.
+    setGym({
+      nombre: g.nombre || '',
+      direccion: g.direccion || '',
+      telefono: g.telefono || '',
+      email: g.email_contacto || '',
+    })
+    setHorario(normalizarHorario(g.horario))
+  }).catch(() => {})
 
   useEffect(() => {
     cargarPlanes()
@@ -219,38 +305,10 @@ export default function Configuracion() {
               </div>
             ))}
 
-            <div>
-              <label className="text-[10px] font-bold tracking-widest block mb-1.5" style={{ color: '#8b949e' }}>HORARIO DE ATENCIÓN</label>
-              <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #21262d' }}>
-                {DIAS.map(([k, label], i) => (
-                  <div key={k} className="flex items-center gap-2 px-3 py-2"
-                    style={{ backgroundColor: '#0d1117', borderTop: i ? '1px solid #21262d' : undefined }}>
-                    <Toggle value={horario[k].abierto} onChange={v => setDia(k, 'abierto', v)} />
-                    <span className="text-xs w-20 shrink-0" style={{ color: horario[k].abierto ? '#fff' : '#3d444d' }}>{label}</span>
-                    {horario[k].abierto ? (
-                      <div className="flex items-center gap-1.5 flex-1 justify-end">
-                        <input type="time" value={horario[k].inicio}
-                          onChange={e => setDia(k, 'inicio', e.target.value)}
-                          className="text-xs px-2 py-1 rounded bg-transparent text-white outline-none"
-                          style={{ border: '1px solid #21262d', colorScheme: 'dark' }} />
-                        <span className="text-xs" style={{ color: '#3d444d' }}>a</span>
-                        <input type="time" value={horario[k].fin}
-                          onChange={e => setDia(k, 'fin', e.target.value)}
-                          className="text-xs px-2 py-1 rounded bg-transparent text-white outline-none"
-                          style={{ border: '1px solid #21262d', colorScheme: 'dark' }} />
-                      </div>
-                    ) : (
-                      <span className="text-[10px] flex-1 text-right" style={{ color: '#3d444d' }}>Cerrado</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <p className="text-[10px] mt-1.5" style={{ color: '#3d444d' }}>{formatearHorario(horario)}</p>
-            </div>
-
             <button
               type="submit"
-              className="w-full py-3 rounded-lg text-sm font-bold flex items-center justify-center gap-2 mt-2"
+              disabled={guardandoGym || !gymReal}
+              className="w-full py-3 rounded-lg text-sm font-bold flex items-center justify-center gap-2 mt-2 disabled:opacity-50"
               style={{ backgroundColor: '#22c55e', color: '#0d1117' }}
               onMouseEnter={e => e.currentTarget.style.backgroundColor = '#16a34a'}
               onMouseLeave={e => e.currentTarget.style.backgroundColor = '#22c55e'}
@@ -258,7 +316,7 @@ export default function Configuracion() {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
               </svg>
-              Guardar cambios
+              {guardandoGym ? 'Guardando...' : 'Guardar cambios'}
             </button>
           </form>
         </div>
@@ -311,6 +369,99 @@ export default function Configuracion() {
             <p className="text-[10px]" style={{ color: '#3d444d' }}>Último backup: Hoy 04:00am · Siguiente: Mañana 04:00am</p>
           </div>
         </div>
+      </div>
+
+      {/* Horario de atención: en tarjeta propia a ancho completo. Metido dentro de
+          "Información del Gym" (mitad del grid) se recortaba en cuanto un día tenía
+          descansos — la fila de horas + botón de descanso no cabía en la mitad del
+          ancho. Aquí crece verticalmente sin límite y usa todo el ancho disponible. */}
+      <div className="rounded-xl p-6" style={CARD_STYLE}>
+        <div className="flex items-center gap-2 mb-5">
+          <svg className="w-4 h-4 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <div>
+            <h3 className="text-sm font-bold text-white">Horario de Atención</h3>
+            <p className="text-[10px]" style={{ color: '#8b949e' }}>
+              Agrega descansos para cierres parciales dentro del turno (comida, limpieza)
+            </p>
+          </div>
+        </div>
+        <form onSubmit={guardar} className="space-y-4">
+          <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #21262d' }}>
+            {DIAS.map(([k, label], i) => (
+              <div key={k} className="px-3 py-2.5"
+                style={{ backgroundColor: '#0d1117', borderTop: i ? '1px solid #21262d' : undefined }}>
+                <div className="flex items-center gap-3">
+                  <Toggle value={horario[k].abierto} onChange={v => setDia(k, 'abierto', v)} />
+                  <span className="text-xs w-24 shrink-0" style={{ color: horario[k].abierto ? '#fff' : '#3d444d' }}>{label}</span>
+                  {horario[k].abierto ? (
+                    <div className="flex items-center gap-2 flex-1 flex-wrap justify-end">
+                      <input type="time" value={horario[k].inicio}
+                        onChange={e => setDia(k, 'inicio', e.target.value)}
+                        className="text-xs px-2 py-1.5 rounded bg-transparent text-white outline-none"
+                        style={{ border: '1px solid #21262d', colorScheme: 'dark' }} />
+                      <span className="text-xs" style={{ color: '#3d444d' }}>a</span>
+                      <input type="time" value={horario[k].fin}
+                        onChange={e => setDia(k, 'fin', e.target.value)}
+                        className="text-xs px-2 py-1.5 rounded bg-transparent text-white outline-none"
+                        style={{ border: '1px solid #21262d', colorScheme: 'dark' }} />
+                      <button type="button" onClick={() => agregarDescanso(k)}
+                        title="Agregar un cierre dentro de este horario"
+                        className="text-[10px] font-bold px-2 py-1.5 rounded shrink-0 transition-opacity hover:opacity-70"
+                        style={{ border: '1px solid #21262d', color: '#f97316' }}>
+                        + descanso
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-[10px] flex-1 text-right" style={{ color: '#3d444d' }}>Cerrado</span>
+                  )}
+                </div>
+
+                {/* Cierres parciales dentro del turno (comida, limpieza). El gym
+                    sigue abriendo ese día: solo no atiende en esas horas. */}
+                {horario[k].abierto && horario[k].descansos.map((d, j) => (
+                  <div key={j} className="flex items-center gap-2 mt-1.5 pl-9 sm:pl-[60px] flex-wrap">
+                    <span className="text-[10px] shrink-0" style={{ color: '#f97316' }}>Cierra</span>
+                    <div className="flex items-center gap-2 flex-1 flex-wrap justify-end">
+                      <input type="time" value={d.inicio}
+                        onChange={e => setDescanso(k, j, 'inicio', e.target.value)}
+                        className="text-xs px-2 py-1.5 rounded bg-transparent text-white outline-none"
+                        style={{ border: '1px solid rgba(249,115,22,0.35)', colorScheme: 'dark' }} />
+                      <span className="text-xs" style={{ color: '#3d444d' }}>a</span>
+                      <input type="time" value={d.fin}
+                        onChange={e => setDescanso(k, j, 'fin', e.target.value)}
+                        className="text-xs px-2 py-1.5 rounded bg-transparent text-white outline-none"
+                        style={{ border: '1px solid rgba(249,115,22,0.35)', colorScheme: 'dark' }} />
+                      <button type="button" onClick={() => quitarDescanso(k, j)}
+                        title="Quitar descanso"
+                        className="px-2 py-1.5 rounded shrink-0 transition-colors"
+                        style={{ border: '1px solid #21262d', color: '#8b949e' }}>
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px]" style={{ color: '#3d444d' }}>{formatearHorario(horario)}</p>
+          <button
+            type="submit"
+            disabled={guardandoGym || !gymReal}
+            className="w-full sm:w-auto px-6 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-50"
+            style={{ backgroundColor: '#22c55e', color: '#0d1117' }}
+            onMouseEnter={e => e.currentTarget.style.backgroundColor = '#16a34a'}
+            onMouseLeave={e => e.currentTarget.style.backgroundColor = '#22c55e'}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+            </svg>
+            {guardandoGym ? 'Guardando...' : 'Guardar horario'}
+          </button>
+        </form>
       </div>
 
       {/* Sucursales */}
@@ -376,8 +527,8 @@ export default function Configuracion() {
 
       {/* Modal sucursal */}
       {sucModal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <div className="rounded-2xl p-6 w-full max-w-md" style={CARD_STYLE}>
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-md my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
             <h2 className="text-sm font-bold text-white mb-5">
               {sucForm.id ? 'Editar sucursal' : 'Nueva sucursal'}
             </h2>
@@ -478,8 +629,8 @@ export default function Configuracion() {
       </div>
 
       {planModal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <div className="rounded-2xl p-6 w-full max-w-md" style={CARD_STYLE}>
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-md my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-sm font-bold text-white">{planForm.id ? 'Editar plan' : 'Nuevo plan'}</h2>
               <button onClick={() => setPlanModal(false)} style={{ color: '#8b949e' }} className="hover:text-white">

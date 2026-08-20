@@ -59,6 +59,74 @@ class SocioCRUDTests(BaseAPITestCase):
         self.assertEqual(resp.data['membresia_activa']['plan'], 'Mensual')
 
 
+class NumeroSocioTests(BaseAPITestCase):
+    """Número de socio: consecutivo por gym desde 1000, distinto del token del QR.
+
+    Es lo que recepción dice en voz alta y busca a mano; el QR sigue siendo el
+    código con parte aleatoria (`R3B-QR-...`), porque ese abre la puerta y un
+    consecutivo ahí se adivina probando números seguidos.
+    """
+
+    def test_primer_socio_del_gym_empieza_en_1000(self):
+        resp = self.client.post('/api/socios/', {'nombre': 'Juan', 'apellido': 'Perez'})
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        self.assertEqual(resp.data['numero_socio'], 1000)
+
+    def test_numeros_consecutivos_dentro_del_mismo_gym(self):
+        primero = self.client.post('/api/socios/', {'nombre': 'A', 'apellido': 'A'})
+        segundo = self.client.post('/api/socios/', {'nombre': 'B', 'apellido': 'B'})
+        tercero = self.client.post('/api/socios/', {'nombre': 'C', 'apellido': 'C'})
+        self.assertEqual(
+            [primero.data['numero_socio'], segundo.data['numero_socio'], tercero.data['numero_socio']],
+            [1000, 1001, 1002],
+        )
+
+    def test_numero_socio_no_es_el_codigo_del_qr(self):
+        resp = self.client.post('/api/socios/', {'nombre': 'Juan', 'apellido': 'Perez'})
+        self.assertNotEqual(str(resp.data['numero_socio']), resp.data['codigo_acceso'])
+        self.assertTrue(resp.data['codigo_acceso'].startswith('R3B-QR-'))
+
+    def test_cada_gym_numera_desde_1000_por_su_cuenta(self):
+        """Dos negocios no comparten la numeración: cada uno ve su propia lista
+        empezar en 1000, no un consecutivo global del sistema completo."""
+        propio = self.client.post('/api/socios/', {'nombre': 'Propio', 'apellido': 'X'})
+        self.assertEqual(propio.data['numero_socio'], 1000)
+
+        admin_ajeno = Usuario.objects.create_user(
+            email='admin@otro.com', password='Passw0rd1', nombre='Otro Admin',
+            rol='admin', gym=self.otro_gym,
+        )
+        self.authenticate(admin_ajeno)
+        ajeno = self.client.post('/api/socios/', {'nombre': 'Ajeno', 'apellido': 'X'})
+        self.assertEqual(ajeno.data['numero_socio'], 1000)
+
+    def test_cliente_no_puede_fijar_su_propio_numero_de_socio(self):
+        """numero_socio es read_only: el body lo ignora, el servidor manda."""
+        resp = self.client.post('/api/socios/', {
+            'nombre': 'Juan', 'apellido': 'Perez', 'numero_socio': 9999,
+        })
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        self.assertEqual(resp.data['numero_socio'], 1000)
+
+    def test_alta_no_exige_gym_en_el_body(self):
+        """El UniqueConstraint(gym, numero_socio) no debe forzar a mandar 'gym': lo
+        pone el servidor desde el usuario autenticado, como siempre. Regresión de
+        un efecto colateral conocido de DRF con unique_together/UniqueConstraint."""
+        resp = self.client.post('/api/socios/', {'nombre': 'Juan', 'apellido': 'Perez'})
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+
+    def test_dar_de_baja_y_alta_no_reutiliza_numero(self):
+        """Cancelar los datos de un socio (ARCO) no libera su número para que otro
+        lo tome: sería confuso que dos personas distintas hayan sido alguna vez
+        el 'socio 1000'."""
+        primero = self.client.post('/api/socios/', {'nombre': 'A', 'apellido': 'A'})
+        self.client.post(
+            f"/api/socios/{primero.data['id']}/cancelar-datos/", {'password': 'Passw0rd1'},
+        )
+        segundo = self.client.post('/api/socios/', {'nombre': 'B', 'apellido': 'B'})
+        self.assertEqual(segundo.data['numero_socio'], 1001)
+
+
 class MembresiaTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()

@@ -25,3 +25,29 @@
 select option { background: #161b22; color: #fff; }
 
 input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1) opacity(0.5); }
+
+/* Campos de fecha del panel oscuro.
+
+   `color-scheme: dark` (aplicado también inline) es lo que hace que el navegador
+   pinte el calendario emergente en oscuro; el resto es para que el campo se vea
+   como el de las demás pantallas: icono verde de la marca, cursor de clic y foco
+   marcado igual que el de los inputs de texto. */
+.dark-date {
+  color-scheme: dark;
+  position: relative;
+}
+.dark-date::-webkit-calendar-picker-indicator {
+  filter: invert(58%) sepia(72%) saturate(430%) hue-rotate(85deg) brightness(95%);
+  opacity: 0.85;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+}
+.dark-date::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+  background: rgba(34, 197, 94, 0.12);
+}
+.dark-date:focus {
+  border-color: #22c55e !important;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.18);
+}

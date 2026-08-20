@@ -14,4 +14,5 @@ urlpatterns = [
     path('api/usuarios/', include('usuarios.urls')),
     path('api/notificaciones/', include('notificaciones.urls')),
     path('api/tienda/', include('tienda.urls')),
+    path('api/legal/', include('legal.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

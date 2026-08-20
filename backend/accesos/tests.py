@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 
+from django.utils import timezone
 from rest_framework import status
 
 from gyms.tests import BaseAPITestCase
@@ -77,6 +78,85 @@ class CheckInTests(BaseAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         acceso = Acceso.objects.get(socio=self.socio)
         self.assertEqual(acceso.metodo_usado, 'huella')
+
+
+class CheckInUnaVezPorDiaTests(BaseAPITestCase):
+    """Un código no debe abrir la puerta dos veces el mismo día.
+
+    Sin este límite, dos personas se reparten el QR de una sola membresía y ambas
+    entran gratis: la segunda entrada del día es exactamente esa señal.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.socio = Socio.objects.create(gym=self.gym, nombre='Ana', apellido='Lopez')
+        self.plan = Plan.objects.create(gym=self.gym, nombre='Mensual', tipo='mensual', precio=500)
+        self.metodo = MetodoAcceso.objects.create(socio=self.socio, tipo='qr', token='TOKEN123')
+        Membresia.objects.create(
+            socio=self.socio, plan=self.plan, sucursal=self.sucursal,
+            fecha_inicio=date.today(), fecha_fin=date.today() + timedelta(days=30),
+            estado='activa',
+        )
+
+    def checkin(self):
+        return self.client.post('/api/accesos/checkin/', {
+            'token': 'TOKEN123', 'sucursal_id': self.sucursal.id,
+        })
+
+    def test_segunda_entrada_del_dia_se_rechaza(self):
+        primera = self.checkin()
+        self.assertEqual(primera.status_code, status.HTTP_200_OK)
+
+        segunda = self.checkin()
+        self.assertEqual(segunda.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('ya se registró', segunda.data['motivo'])
+
+        acceso = Acceso.objects.filter(resultado='denegado').get()
+        self.assertEqual(acceso.motivo_denegado, 'ya_registrado')
+        self.assertEqual(Acceso.objects.filter(resultado='permitido').count(), 1)
+
+    def test_no_bloquea_a_otro_socio_el_mismo_dia(self):
+        otro = Socio.objects.create(gym=self.gym, nombre='Beto', apellido='Diaz')
+        MetodoAcceso.objects.create(socio=otro, tipo='qr', token='TOKEN-BETO')
+        Membresia.objects.create(
+            socio=otro, plan=self.plan, sucursal=self.sucursal,
+            fecha_inicio=date.today(), fecha_fin=date.today() + timedelta(days=30),
+            estado='activa',
+        )
+        self.checkin()
+        resp = self.client.post('/api/accesos/checkin/', {
+            'token': 'TOKEN-BETO', 'sucursal_id': self.sucursal.id,
+        })
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_entrada_de_ayer_no_bloquea_hoy(self):
+        ayer = Acceso.objects.create(
+            socio=self.socio, sucursal=self.sucursal, resultado='permitido', metodo_usado='qr',
+        )
+        Acceso.objects.filter(pk=ayer.pk).update(timestamp=timezone.now() - timedelta(days=1))
+        resp = self.checkin()
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_intento_denegado_no_cuenta_como_entrada_previa(self):
+        """Un intento rechazado (p. ej. huella no soportada) no debe bloquear el
+        intento legítimo que viene detrás el mismo día."""
+        Acceso.objects.create(
+            socio=self.socio, sucursal=self.sucursal, resultado='denegado',
+            motivo_denegado='suspendido', metodo_usado='qr',
+        )
+        resp = self.checkin()
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_se_repite_en_una_sucursal_distinta_del_mismo_gym(self):
+        """El límite es por socio, no por puerta: compartir el código entre dos
+        locales del mismo negocio es el mismo abuso."""
+        from gyms.models import Sucursal
+        otra_sucursal = Sucursal.objects.create(gym=self.gym, nombre='Otra')
+        self.checkin()
+        resp = self.client.post('/api/accesos/checkin/', {
+            'token': 'TOKEN123', 'sucursal_id': otra_sucursal.id,
+        })
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class CheckInThrottleTests(BaseAPITestCase):

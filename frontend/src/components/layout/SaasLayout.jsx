@@ -26,7 +26,7 @@ export default function SaasLayout() {
       <div className="text-sm font-bold tracking-[0.2em]" style={{ color: T.acento }}>CARGANDO</div>
     </div>
   )
-  if (!user) return <Navigate to="/login" replace />
+  if (!user) return <Navigate to="/saas/login" replace />
   if (!esSuperAdmin) return <Navigate to="/" replace />
 
   return (

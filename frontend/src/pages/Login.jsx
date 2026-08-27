@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
 
 export default function Login() {
-  const { login } = useAuth()
+  const { login, logout } = useAuth()
   const navigate = useNavigate()
   const [form, setForm] = useState({ email: '', password: '' })
   const [showPassword, setShowPassword] = useState(false)
@@ -15,12 +15,19 @@ export default function Login() {
     setLoading(true)
     try {
       const payload = await login(form.email, form.password)
-      if (payload?.sucursales_permitidas?.length >= 2) {
+      // El dueño del SaaS tiene su propia URL (/saas/login), separada a propósito:
+      // este formulario es el que ve cualquier recepción de cualquier gimnasio, y
+      // no debería ni insinuar que existe un panel por encima del de un negocio.
+      if (payload?.rol === 'superadmin') {
+        logout()
+        toast.error('Usa el acceso de administrador en /saas/login')
+        return
+      }
+      if (payload?.requiere_seleccion_sucursal) {
         navigate('/seleccionar-sucursal')
         return
       }
-      const esAdmin = payload?.rol === 'admin' || payload?.rol === 'superadmin'
-      navigate(esAdmin ? '/dashboard' : '/checkin')
+      navigate(payload?.rol === 'admin' ? '/dashboard' : '/checkin')
     } catch {
       toast.error('Credenciales incorrectas')
     } finally {

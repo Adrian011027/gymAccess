@@ -24,7 +24,9 @@ class PlanViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, AdminOSoloLectura]
 
     def get_queryset(self):
-        return Plan.objects.filter(gym_id=self.request.user.gym_id, activo=True)
+        return Plan.objects.filter(
+            gym_id=self.request.user.gym_id, activo=True
+        ).prefetch_related('precios_sucursal')
 
     def perform_create(self, serializer):
         """El gym lo pone el servidor.
@@ -248,7 +250,12 @@ class MembresiaViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         return self.scope_sucursal(
             Membresia.objects.filter(socio__gym_id=self.request.user.gym_id)
-        ).select_related('socio', 'plan')
+        ).select_related('socio', 'plan').prefetch_related(
+            models.Prefetch(
+                'plan__precios_sucursal',
+                to_attr='precios_sucursal_prefetched',
+            )
+        )
 
     def _validar_pertenencia(self, serializer):
         """El queryset de lectura ya filtra por gym, pero la escritura no validaba nada:

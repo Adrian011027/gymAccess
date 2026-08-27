@@ -726,9 +726,14 @@ export default function Socios() {
                   className={inputCls} style={INPUT_STYLE}
                 >
                   <option value="">{form.id ? 'Sin plan' : 'Selecciona un plan'}</option>
-                  {planes.map(p => (
-                    <option key={p.id} value={p.id}>{p.nombre} — ${p.precio}</option>
-                  ))}
+                  {planes.map(p => {
+                    // Precio de la sucursal elegida si el plan lo excepciona ahí; si no,
+                    // el base. Mismo cálculo que `Plan.precio_en` en el backend.
+                    const override = p.precios_sucursal?.find(o => String(o.sucursal) === String(form.sucursal))
+                    return (
+                      <option key={p.id} value={p.id}>{p.nombre} — ${override?.precio ?? p.precio}</option>
+                    )
+                  })}
                 </select>
                 {planes.length === 0 && (
                   <p className="text-[10px] mt-1 font-semibold" style={{ color: '#f97316' }}>

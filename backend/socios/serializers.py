@@ -1,11 +1,54 @@
 from rest_framework import serializers
-from .models import AjusteMembresia, Plan, Socio, Membresia, Pago, Gasto
+from .models import AjusteMembresia, Plan, PrecioPlanSucursal, Socio, Membresia, Pago, Gasto
+
+
+class PrecioPlanSucursalSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PrecioPlanSucursal
+        fields = ['id', 'sucursal', 'precio']
 
 
 class PlanSerializer(serializers.ModelSerializer):
+    # El servidor lo pone en PlanViewSet.perform_create/perform_update: si quedara
+    # como campo de entrada, un POST sin `gym` fallaría la validación con 400 antes
+    # de llegar ahí, y uno con `gym` ajeno podría escribir en el catálogo de otro.
+    #
+    # Opcional a propósito: la mayoría de gyms cobra igual en todas sus sucursales y
+    # nunca manda esta lista. Quien sí varía el precio por local manda excepciones
+    # puntuales; el resto sigue usando `precio`.
+    precios_sucursal = PrecioPlanSucursalSerializer(many=True, required=False)
+
     class Meta:
         model = Plan
         fields = '__all__'
+        read_only_fields = ['gym']
+
+    def validate_precios_sucursal(self, value):
+        gym_id = self.context['request'].user.gym_id
+        for item in value:
+            if item['sucursal'].gym_id != gym_id:
+                raise serializers.ValidationError('Sucursal no encontrada.')
+        return value
+
+    def create(self, validated_data):
+        precios = validated_data.pop('precios_sucursal', [])
+        plan = super().create(validated_data)
+        self._guardar_precios(plan, precios)
+        return plan
+
+    def update(self, instance, validated_data):
+        precios = validated_data.pop('precios_sucursal', None)
+        plan = super().update(instance, validated_data)
+        if precios is not None:
+            plan.precios_sucursal.all().delete()
+            self._guardar_precios(plan, precios)
+        return plan
+
+    def _guardar_precios(self, plan, precios):
+        PrecioPlanSucursal.objects.bulk_create(
+            PrecioPlanSucursal(plan=plan, sucursal=p['sucursal'], precio=p['precio'])
+            for p in precios
+        )
 
 
 class SocioSerializer(serializers.ModelSerializer):
@@ -133,11 +176,19 @@ class SocioSerializer(serializers.ModelSerializer):
 class MembresiaSerializer(serializers.ModelSerializer):
     socio_nombre = serializers.CharField(source='socio.__str__', read_only=True)
     plan_nombre = serializers.CharField(source='plan.nombre', read_only=True)
-    plan_precio = serializers.DecimalField(source='plan.precio', read_only=True, max_digits=10, decimal_places=2)
+    # Precio efectivo de ESTA sucursal, no el base del plan: si el gym cobra distinto
+    # por local (Plan.precio_en), lo que se prefirma en Pagos tiene que ser lo que
+    # corresponde a la sucursal de la membresía, no el precio de la matriz.
+    plan_precio = serializers.SerializerMethodField()
 
     class Meta:
         model = Membresia
         fields = '__all__'
+
+    def get_plan_precio(self, obj):
+        # str() y no el Decimal crudo: DecimalField (lo que este campo reemplazó) lo
+        # serializaba como string, y el frontend/los tests dependen de ese formato.
+        return str(obj.plan.precio_en(obj.sucursal_id))
 
 
 class PagoSerializer(serializers.ModelSerializer):

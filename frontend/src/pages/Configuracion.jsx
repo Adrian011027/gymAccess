@@ -166,6 +166,19 @@ export default function Configuracion() {
   const [planModal, setPlanModal] = useState(false)
   const [planForm, setPlanForm] = useState(PLAN_EMPTY)
   const [planLoading, setPlanLoading] = useState(false)
+  // Precio por sucursal: opt-in. La mayoría de gyms cobra igual en todos lados, así
+  // que el form arranca con esto apagado y solo el que lo activa ve las filas por
+  // sucursal; el resto ni se entera de que la opción existe.
+  const [precioVaria, setPrecioVaria] = useState(false)
+  const [preciosPorSucursal, setPreciosPorSucursal] = useState({})
+
+  const abrirPlan = p => {
+    setPlanForm(p ? { ...p } : PLAN_EMPTY)
+    const overrides = p?.precios_sucursal || []
+    setPrecioVaria(overrides.length > 0)
+    setPreciosPorSucursal(Object.fromEntries(overrides.map(o => [o.sucursal, String(o.precio)])))
+    setPlanModal(true)
+  }
 
   const cargarPlanes = () => api.get('/socios/planes/').then(r => setPlanes(r.data)).catch(() => {})
 
@@ -240,6 +253,13 @@ export default function Configuracion() {
         ...planForm,
         duracion_dias: planForm.duracion_dias || null,
         num_clases: planForm.num_clases || null,
+        // Lista explícita (incluso vacía) para que apagar el interruptor borre las
+        // excepciones que ya existían: el backend reemplaza el set completo.
+        precios_sucursal: precioVaria
+          ? Object.entries(preciosPorSucursal)
+              .filter(([, precio]) => precio !== '')
+              .map(([sucursal, precio]) => ({ sucursal: Number(sucursal), precio }))
+          : [],
       }
       if (planForm.id) {
         await api.patch(`/socios/planes/${planForm.id}/`, payload)
@@ -483,16 +503,37 @@ export default function Configuracion() {
         </div>
         <div className="space-y-2">
           {sucursales.map(s => (
-            <div key={s.id} className="flex items-center justify-between rounded-lg px-4 py-3"
+            <div key={s.id} className="rounded-lg px-4 py-3"
               style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
-              <div>
-                <p className="text-xs font-bold text-white">{s.nombre}</p>
-                <p className="text-[10px]" style={{ color: '#8b949e' }}>{s.direccion || 'Sin dirección'}</p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-bold text-white">{s.nombre}</p>
+                  <p className="text-[10px]" style={{ color: '#8b949e' }}>{s.direccion || 'Sin dirección'}</p>
+                </div>
+                <button onClick={() => { setSucForm(s); setSucModal(true) }}
+                  className="text-[10px] font-semibold" style={{ color: '#8b949e' }}>
+                  Editar
+                </button>
               </div>
-              <button onClick={() => { setSucForm(s); setSucModal(true) }}
-                className="text-[10px] font-semibold" style={{ color: '#8b949e' }}>
-                Editar
-              </button>
+              {/* Precio de cada plan EN esta sucursal: el base salvo que el plan tenga
+                  una excepción para este local (ver checkbox "precio distinto por
+                  sucursal" en Planes). */}
+              {planes.length > 0 && (
+                <div className="mt-3 pt-3 flex flex-wrap gap-x-4 gap-y-1" style={{ borderTop: '1px solid #21262d' }}>
+                  {planes.map(p => {
+                    const override = p.precios_sucursal?.find(o => o.sucursal === s.id)
+                    return (
+                      <p key={p.id} className="text-[10px]" style={{ color: '#8b949e' }}>
+                        {p.nombre}{' '}
+                        <span className="font-bold" style={{ color: override ? '#f97316' : '#22c55e' }}>
+                          ${override?.precio ?? p.precio}
+                        </span>
+                        {override && <span style={{ color: '#3d444d' }}> (excepción)</span>}
+                      </p>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           ))}
           {sucursales.length === 0 && (
@@ -581,7 +622,7 @@ export default function Configuracion() {
             </div>
           </div>
           <button
-            onClick={() => { setPlanForm(PLAN_EMPTY); setPlanModal(true) }}
+            onClick={() => abrirPlan(null)}
             className="px-3 py-2 rounded-lg text-xs font-bold"
             style={{ backgroundColor: '#22c55e', color: '#0d1117' }}
           >
@@ -601,11 +642,18 @@ export default function Configuracion() {
                   </p>
                 </div>
                 <div className="flex items-center gap-4">
-                  <p className="text-2xl font-black text-white">
-                    <span style={{ color: '#22c55e' }}>${p.precio}</span>
-                  </p>
+                  <div className="text-right">
+                    <p className="text-2xl font-black text-white leading-none">
+                      <span style={{ color: '#22c55e' }}>${p.precio}</span>
+                    </p>
+                    {p.precios_sucursal?.length > 0 && (
+                      <p className="text-[9px] mt-1 font-bold" style={{ color: '#f97316' }}>
+                        varía en {p.precios_sucursal.length} sucursal{p.precios_sucursal.length > 1 ? 'es' : ''}
+                      </p>
+                    )}
+                  </div>
                   <button
-                    onClick={() => { setPlanForm(p); setPlanModal(true) }}
+                    onClick={() => abrirPlan(p)}
                     style={{ color: '#8b949e' }} className="hover:text-white transition-colors">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -658,6 +706,35 @@ export default function Configuracion() {
                     className="mt-1" style={INPUT_STYLE} />
                 </div>
               </div>
+
+              {sucursales.length > 1 && (
+                <div className="rounded-lg p-3" style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={precioVaria}
+                      onChange={e => setPrecioVaria(e.target.checked)} />
+                    <span className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>
+                      PRECIO DISTINTO POR SUCURSAL
+                    </span>
+                  </label>
+                  {precioVaria && (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-[10px]" style={{ color: '#3d444d' }}>
+                        Deja una sucursal vacía para que use el precio base (${planForm.precio || '—'}).
+                      </p>
+                      {sucursales.map(s => (
+                        <div key={s.id} className="flex items-center gap-2">
+                          <span className="text-xs flex-1 truncate" style={{ color: '#c9d1d9' }}>{s.nombre}</span>
+                          <input type="number" step="0.01" placeholder={planForm.precio || '0.00'}
+                            value={preciosPorSucursal[s.id] ?? ''}
+                            onChange={e => setPreciosPorSucursal(m => ({ ...m, [s.id]: e.target.value }))}
+                            className="shrink-0" style={{ ...INPUT_STYLE, width: '112px' }} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>DURACIÓN (DÍAS)</label>

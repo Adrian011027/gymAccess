@@ -27,6 +27,46 @@ class Plan(models.Model):
     def __str__(self):
         return f'{self.nombre} - ${self.precio}'
 
+    def precio_en(self, sucursal_id):
+        """Precio efectivo del plan en una sucursal.
+
+        La mayoría de gyms cobran igual en todos lados y nunca crean filas en
+        `PrecioPlanSucursal`, así que el default es `self.precio`. Los que sí varían
+        por local (renta distinta por zona, etc.) crean una excepción puntual ahí;
+        el resto de sucursales sigue cayendo al precio base.
+        """
+        if sucursal_id is None:
+            return self.precio
+        # `precios_sucursal_prefetched` la deja `MembresiaViewSet` con Prefetch()
+        # para no pagar una query por membresía al listar; si no está, se consulta.
+        overrides = getattr(self, 'precios_sucursal_prefetched', None)
+        if overrides is not None:
+            for o in overrides:
+                if o.sucursal_id == sucursal_id:
+                    return o.precio
+            return self.precio
+        override = self.precios_sucursal.filter(sucursal_id=sucursal_id).first()
+        return override.precio if override else self.precio
+
+
+class PrecioPlanSucursal(models.Model):
+    """Excepción de precio: este plan cuesta distinto en esta sucursal puntual.
+
+    Sin filas aquí, `Plan.precio` manda en todas las sucursales — el caso normal.
+    Un gym que cobra distinto por local solo agrega las excepciones que necesita,
+    no un precio por cada combinación plan×sucursal.
+    """
+    plan = models.ForeignKey(Plan, on_delete=models.CASCADE, related_name='precios_sucursal')
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.CASCADE, related_name='precios_plan')
+    precio = models.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        db_table = 'precios_plan_sucursal'
+        unique_together = ('plan', 'sucursal')
+
+    def __str__(self):
+        return f'{self.plan.nombre} @ {self.sucursal.nombre}: ${self.precio}'
+
 
 class Socio(models.Model):
     SEXO_CHOICES = [('M', 'Masculino'), ('F', 'Femenino'), ('O', 'Otro')]

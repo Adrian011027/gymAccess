@@ -1,9 +1,12 @@
 from django.contrib.auth.password_validation import validate_password as validar_password_django
 from django.core.exceptions import ValidationError as ValidationErrorDjango
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import Usuario
 from .permissions import ROLES_ADMIN
+
+DIAS_SEMANA = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo']
 
 
 class LoginSerializer(TokenObtainPairSerializer):
@@ -23,6 +26,21 @@ class LoginSerializer(TokenObtainPairSerializer):
 
     @classmethod
     def get_token(cls, user):
+        # Si el horario de hoy ya dice en qué sucursal trabaja, se asigna sola: no
+        # tiene sentido preguntarle "¿en qué sucursal trabajas hoy?" a quien ya lo
+        # dejó escrito en su horario. El día se recalcula en cada login (no se confía
+        # en `user.sucursal` de una sesión vieja) para que quien rota de local entre
+        # ayer y hoy no arrastre la sucursal de ayer.
+        sucursal_hoy = None
+        if user.sucursal_id or user.sucursales_permitidas.exists():
+            dia_hoy = DIAS_SEMANA[timezone.localdate().weekday()]
+            sucursal_hoy_id = (user.horario_semanal or {}).get(dia_hoy)
+            if sucursal_hoy_id:
+                sucursal_hoy = user.sucursales_permitidas.filter(id=sucursal_hoy_id).first()
+                if sucursal_hoy and user.sucursal_id != sucursal_hoy.id:
+                    user.sucursal = sucursal_hoy
+                    user.save(update_fields=['sucursal'])
+
         token = super().get_token(user)
         token['nombre'] = user.nombre
         token['email'] = user.email
@@ -32,10 +50,16 @@ class LoginSerializer(TokenObtainPairSerializer):
         # selector y rotular en qué caja está parado.
         token['sucursal_id'] = user.sucursal_id
         token['sucursal_nombre'] = user.sucursal.nombre if user.sucursal_id else None
-        # Con qué sucursales puede rotar: si son 2+, el frontend pide elegir una
-        # al entrar antes de mandarlo al panel.
+        # Con qué sucursales puede rotar. El frontend ya no decide solo con esto si
+        # pregunta al entrar: ver `requiere_seleccion_sucursal`.
         token['sucursales_permitidas'] = list(
             user.sucursales_permitidas.values('id', 'nombre')
+        )
+        # Solo se pregunta cuando puede rotar Y hoy no quedó resuelto por el horario.
+        # Si el horario de hoy lo dejó fijado (arriba), o solo tiene una sucursal
+        # permitida, entra derecho a su panel.
+        token['requiere_seleccion_sucursal'] = (
+            user.sucursales_permitidas.count() >= 2 and sucursal_hoy is None
         )
         return token
 

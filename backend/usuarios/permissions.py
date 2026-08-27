@@ -13,6 +13,18 @@ class EsAdminGym(BasePermission):
         )
 
 
+class EsSuperAdmin(BasePermission):
+    """Solo el dueño del SaaS. Es el único rol que opera *sobre* los gimnasios.
+
+    Deliberadamente NO acepta 'admin': el admin es el dueño de un gimnasio, y darle
+    entrada aquí le dejaría ver y tocar a los demás clientes del SaaS. `ROLES_ADMIN`
+    mete a los dos en el mismo saco y por eso no se usa en este panel.
+    """
+
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.rol == 'superadmin'
+
+
 class AdminOSoloLectura(BasePermission):
     """Cualquier usuario autenticado puede leer; solo admin puede escribir."""
 

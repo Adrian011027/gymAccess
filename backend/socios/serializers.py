@@ -109,7 +109,10 @@ class SocioSerializer(serializers.ModelSerializer):
         m = obj.membresias.vigentes().first()
         if not m:
             return None
-        return {'id': m.id, 'plan': m.plan.nombre, 'fecha_fin': m.fecha_fin, 'estado': m.estado}
+        return {
+            'id': m.id, 'plan': m.plan.nombre, 'plan_id': m.plan_id,
+            'fecha_fin': m.fecha_fin, 'estado': m.estado,
+        }
 
     def get_membresia_reciente(self, obj):
         """La última membresía exista o no vigencia. `membresia_activa` es null para un
@@ -118,8 +121,11 @@ class SocioSerializer(serializers.ModelSerializer):
         m = obj.membresias.order_by('-fecha_inicio', '-id').first()
         if not m:
             return None
+        # `plan_id` además del nombre: la pantalla de edición preselecciona el plan en
+        # un <select> y necesita la clave. Casar por nombre se rompe en cuanto dos
+        # sucursales tengan un plan que se llame igual.
         return {
-            'id': m.id, 'plan': m.plan.nombre,
+            'id': m.id, 'plan': m.plan.nombre, 'plan_id': m.plan_id,
             'fecha_inicio': m.fecha_inicio, 'fecha_fin': m.fecha_fin, 'estado': m.estado,
         }
 

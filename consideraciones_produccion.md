@@ -1,5 +1,27 @@
 # Consideraciones para migrar a producción
 
+> ## ⚠️ SUPERADO — no seguir estas instrucciones al pie de la letra
+>
+> Para desplegar, usar **`plan_de_despliegue.md`**, que es la guía ejecutable y está al
+> día. Este documento (19 de julio de 2026) se escribió antes de Docker y antes de la
+> auditoría de seguridad, y se conserva porque explica **por qué** de cada medida mejor
+> que el plan nuevo — pero varias de sus instrucciones ya no aplican:
+>
+> | Lo que dice aquí | Realidad hoy |
+> |---|---|
+> | Editar `settings.py` para DEBUG, SECRET_KEY, CORS, HTTPS, JWT, URL del admin | **Ya está hecho** en el código; se controla por variables de entorno (`.env.example`) |
+> | "Descomenta el bloque MySQL de `settings.py`" | Ese bloque **ya no existe**; se migró a **Postgres** y `mysqlclient` salió de `requirements.txt` |
+> | `pip install gunicorn` + servicio systemd | gunicorn va **dentro del contenedor**; lo reinicia Docker |
+> | `collectstatic` a mano | Lo corre el contenedor al arrancar |
+> | Apuntar la API con `VITE_API_URL` | Innecesario: `axios.js` usa `baseURL: '/api'` **relativo**, así que nginx sirve SPA y API desde el mismo origen |
+> | Backend en el puerto 8000 | **8001** — el 8000 lo ocupa `saas_agenda_backend` (el SaaS de spas) |
+>
+> Lo que **sigue vigente y sin hacer** es la parte de servidor: nginx, Redis para el
+> throttling, firewall, Cloudflare, backups, logging y monitoreo. El plan nuevo lo
+> recoge con los comandos concretos de este droplet.
+
+---
+
 Checklist para desplegar gymAccess (Round3Boxing) en el droplet de Digital Ocean de forma segura.
 Ordenado por prioridad: lo marcado como **[CRÍTICO]** debe hacerse **antes** de exponer el servidor a internet.
 

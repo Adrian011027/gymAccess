@@ -61,7 +61,7 @@ class UsuarioSerializerSucursalesTests(BaseDosSucursales):
             'nombre': 'Rota', 'email': 'rota@round3.com', 'rol': 'recepcion',
             'gym': self.gym.id, 'sucursal': self.centro.id,
             'sucursales_permitidas': [self.centro.id, self.norte.id],
-            'password': 'Passw0rd1',
+            'password': 'tejocote-ancla-71',
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         creado = Usuario.objects.get(email='rota@round3.com')
@@ -76,7 +76,7 @@ class UsuarioSerializerSucursalesTests(BaseDosSucursales):
             'nombre': 'Rota', 'email': 'rota2@round3.com', 'rol': 'recepcion',
             'gym': self.gym.id, 'sucursal': self.norte.id,
             'sucursales_permitidas': [self.centro.id],
-            'password': 'Passw0rd1',
+            'password': 'tejocote-ancla-71',
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
@@ -87,6 +87,6 @@ class UsuarioSerializerSucursalesTests(BaseDosSucursales):
             'gym': self.gym.id, 'sucursal': self.centro.id,
             'sucursales_permitidas': [self.centro.id],
             'horario_semanal': {'lunes': self.norte.id},
-            'password': 'Passw0rd1',
+            'password': 'tejocote-ancla-71',
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)

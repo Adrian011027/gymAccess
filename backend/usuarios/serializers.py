@@ -1,3 +1,5 @@
+from django.contrib.auth.password_validation import validate_password as validar_password_django
+from django.core.exceptions import ValidationError as ValidationErrorDjango
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import Usuario
@@ -6,6 +8,18 @@ from .permissions import ROLES_ADMIN
 
 class LoginSerializer(TokenObtainPairSerializer):
     """JWT con datos del usuario para que el frontend conozca su rol."""
+
+    def validate(self, attrs):
+        datos = super().validate(attrs)
+        # `JWTUsuarioOperativo` corta a quien ya tiene token; esto corta a quien
+        # intenta sacar uno nuevo. Sin las dos mitades, suspender a un cliente solo
+        # le estorbaría hasta que volviera a iniciar sesión.
+        gym = getattr(self.user, 'gym', None)
+        if gym is not None and not gym.activo:
+            raise serializers.ValidationError(
+                'El gimnasio está suspendido. Contacta al proveedor del sistema.'
+            )
+        return datos
 
     @classmethod
     def get_token(cls, user):
@@ -39,6 +53,69 @@ class UsuarioSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['creado_en']
 
+    def validate_password(self, value):
+        """Los validadores de `AUTH_PASSWORD_VALIDATORS` no se ejecutan solos.
+
+        `set_password()` únicamente cifra: no comprueba nada. Sin esta llamada
+        explícita la configuración de validadores existe pero no corre nunca, y "1"
+        pasa como contraseña válida —verificado: alta 201 y login 200—.
+        """
+        try:
+            validar_password_django(value)
+        except ValidationErrorDjango as e:
+            raise serializers.ValidationError(list(e.messages))
+        return value
+
+    def _validar_autoridad(self, attrs):
+        """Quién puede otorgar qué.
+
+        `rol` y `gym` viajaban como dos campos más de un `ModelSerializer`, y el
+        permiso del ViewSet (`EsAdminGym`) solo mira si quien pide es admin, no qué
+        está pidiendo. Como el admin de un gimnasio se encuentra dentro de su propio
+        `get_queryset`, podía editarse a sí mismo: un PATCH con `rol=superadmin` le
+        daba el panel del SaaS entero —y con él los demás clientes— en la siguiente
+        petición, sin volver a iniciar sesión.
+        """
+        request = self.context.get('request')
+        actor = getattr(request, 'user', None)
+        if actor is None or not actor.is_authenticated:
+            return attrs
+        es_super = actor.rol == 'superadmin'
+
+        # Tocar la ficha de un superadmin (su contraseña, por ejemplo) es tomar su
+        # cuenta. Hoy el scoping por gym ya lo estorba porque el superadmin no tiene
+        # gym, pero eso es un accidente de los datos, no una regla.
+        if self.instance is not None and self.instance.rol == 'superadmin' and not es_super:
+            raise serializers.ValidationError(
+                {'detail': 'Solo un superadministrador puede editar esta cuenta.'}
+            )
+
+        rol = attrs.get('rol')
+        if rol is not None:
+            # Nadie se asciende a sí mismo. Un admin sí puede nombrar a otro admin:
+            # lo que se cierra es el ascenso propio, que no necesita cómplice.
+            if self.instance is not None and self.instance.pk == actor.pk and rol != self.instance.rol:
+                raise serializers.ValidationError(
+                    {'rol': 'No puedes cambiar tu propio rol. Pídeselo a otro administrador.'}
+                )
+            if rol == 'superadmin' and not es_super:
+                raise serializers.ValidationError(
+                    {'rol': 'El rol de superadministrador solo lo otorga otro superadministrador.'}
+                )
+
+        # `gym` no se elige: es el del actor al crear, y el que ya tenía al editar.
+        # Escribible permitía a un admin mudarse al gimnasio de al lado con un PATCH
+        # y leer sus datos con el mismo token, porque a partir de ahí el scoping por
+        # gym trabaja a su favor.
+        #
+        # Se FIJA en vez de descartarse: la validación de sucursal de más abajo
+        # compara contra `attrs['gym']` y se salta sola cuando el campo no viene, así
+        # que un simple `pop` dejaría colar un empleado apuntando a la sucursal de
+        # otro negocio —cambiar un agujero por otro—.
+        if not es_super:
+            attrs['gym'] = getattr(self.instance, 'gym', None) or actor.gym
+        return attrs
+
     def validate(self, attrs):
         """La sucursal asignada tiene que ser del gym del usuario, y la activa
         y el horario tienen que salir del conjunto de permitidas.
@@ -46,6 +123,7 @@ class UsuarioSerializer(serializers.ModelSerializer):
         Sin esto se puede dejar a alguien apuntando a la sucursal de otro negocio, y
         el filtrado por sucursal lo mandaría a ver datos ajenos.
         """
+        attrs = self._validar_autoridad(attrs)
         sucursal = attrs.get('sucursal', getattr(self.instance, 'sucursal', None))
         gym = attrs.get('gym', getattr(self.instance, 'gym', None))
         if sucursal is not None and gym is not None and sucursal.gym_id != gym.id:

@@ -17,7 +17,7 @@ from django.utils import timezone
 from gyms.models import Gym, Sucursal, Clase, Equipamiento
 from usuarios.models import Usuario
 from socios.models import Plan, Socio, Membresia, Pago, Gasto
-from accesos.models import MetodoAcceso, Acceso
+from accesos.models import MetodoAcceso, Acceso, generar_token_qr
 
 
 class Command(BaseCommand):
@@ -150,7 +150,7 @@ class Command(BaseCommand):
             MetodoAcceso.objects.create(
                 socio=socio,
                 tipo='qr',
-                token=f'R3B-QR-{socio.id:05d}-{random.randint(1000, 9999)}',
+                token=generar_token_qr(socio.id),
                 activo=True,
             )
 

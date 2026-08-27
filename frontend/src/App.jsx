@@ -16,10 +16,15 @@ import Notificaciones from './pages/Notificaciones'
 import Empleados from './pages/Empleados'
 import Legal from './pages/Legal'
 import SeleccionarSucursal from './pages/SeleccionarSucursal'
+import Saas from './pages/Saas'
+import SaasSoporte from './pages/SaasSoporte'
+import SaasLayout from './components/layout/SaasLayout'
 
-// El admin aterriza en el dashboard; recepción va directo al check-in.
+// El dueño del SaaS aterriza en su panel; el admin de un gimnasio en el dashboard;
+// recepción va directo al check-in.
 function HomeRedirect() {
-  const { isAdmin } = useAuth()
+  const { isAdmin, esSuperAdmin } = useAuth()
+  if (esSuperAdmin) return <Navigate to="/saas" replace />
   return <Navigate to={isAdmin ? '/dashboard' : '/checkin'} replace />
 }
 
@@ -43,6 +48,10 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/seleccionar-sucursal" element={<SeleccionarSucursal />} />
+          <Route path="/saas" element={<SaasLayout />}>
+            <Route index element={<Saas />} />
+            <Route path="soporte" element={<SaasSoporte />} />
+          </Route>
           <Route element={<Layout />}>
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/checkin"      element={<CheckIn />} />

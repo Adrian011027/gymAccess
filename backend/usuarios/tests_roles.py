@@ -167,7 +167,7 @@ class MatrizDeEscrituraTests(RolBase):
     def test_recepcion_no_puede_crear_usuarios(self):
         self.authenticate(self.recepcion)
         resp = self.client.post('/api/usuarios/', {
-            'email': 'colado@round3.com', 'password': 'Passw0rd1',
+            'email': 'colado@round3.com', 'password': 'tejocote-ancla-71',
             'nombre': 'Colado', 'rol': 'admin',
         })
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
@@ -196,18 +196,18 @@ class MatrizDeEscrituraTests(RolBase):
 class GestionDeUsuariosTests(RolBase):
     def test_admin_crea_recepcionista_en_su_gym(self):
         resp = self.client.post('/api/usuarios/', {
-            'email': 'nueva@round3.com', 'password': 'Passw0rd1',
+            'email': 'nueva@round3.com', 'password': 'tejocote-ancla-71',
             'nombre': 'Nueva', 'rol': 'recepcion', 'sucursal': self.sucursal.id,
         })
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         creado = Usuario.objects.get(email='nueva@round3.com')
         self.assertEqual(creado.gym_id, self.gym.id)
-        self.assertTrue(creado.check_password('Passw0rd1'))
+        self.assertTrue(creado.check_password('tejocote-ancla-71'))
 
     def test_gym_del_payload_es_ignorado(self):
         """Un admin no puede sembrar usuarios en el gym de otro negocio."""
         resp = self.client.post('/api/usuarios/', {
-            'email': 'infiltrado@x.com', 'password': 'Passw0rd1', 'nombre': 'Infiltrado',
+            'email': 'infiltrado@x.com', 'password': 'tejocote-ancla-71', 'nombre': 'Infiltrado',
             'rol': 'admin', 'gym': self.otro_gym.id,
         })
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
@@ -235,13 +235,13 @@ class GestionDeUsuariosTests(RolBase):
 
     def test_email_duplicado_es_rechazado(self):
         resp = self.client.post('/api/usuarios/', {
-            'email': 'admin@round3.com', 'password': 'Passw0rd1', 'nombre': 'Clon',
+            'email': 'admin@round3.com', 'password': 'tejocote-ancla-71', 'nombre': 'Clon',
         })
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_rol_invalido_es_rechazado(self):
         resp = self.client.post('/api/usuarios/', {
-            'email': 'x@round3.com', 'password': 'Passw0rd1', 'nombre': 'X', 'rol': 'dueño',
+            'email': 'x@round3.com', 'password': 'tejocote-ancla-71', 'nombre': 'X', 'rol': 'dueño',
         })
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 

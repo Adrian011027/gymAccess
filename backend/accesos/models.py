@@ -1,6 +1,24 @@
+import secrets
+
 from django.db import models
 from socios.models import Socio, Membresia
 from gyms.models import Sucursal
+
+
+def generar_token_qr(socio_id):
+    """Código de acceso de un socio.
+
+    La parte aleatoria sale de `secrets`, no de `random`: el formato anterior era
+    `R3B-QR-{id:05d}-{random.randint(1000,9999)}`, o sea **9 000 combinaciones** por
+    socio sobre un id secuencial, y con un generador que no es criptográfico. Con el
+    código impreso en la credencial a la vista, adivinar el de otro socio era
+    cuestión de intentar.
+
+    Vive aquí porque la misma línea estaba copiada en `AsignarQRView`,
+    `SocioViewSet.perform_create` y el comando de siembra: tres sitios que tenían que
+    cambiar a la vez y ninguno sabía de los otros.
+    """
+    return f'R3B-QR-{socio_id:05d}-{secrets.token_urlsafe(12)}'
 
 
 class MetodoAcceso(models.Model):

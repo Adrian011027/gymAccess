@@ -9,6 +9,22 @@ __pycache__/
 backend/media/
 backend/staticfiles/
 
+# Tests / coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+.pytest_cache/
+
+# Backups y dumps de datos (contienen hashes de contraseñas)
+backups/
+# Cualquier copia de la base, no solo las que empiezan por 'pre-': el respaldo
+# de la migracion a Postgres se llamaba .antes-de-postgres y se colaba.
+# Todas contienen hashes de contrasenas y datos personales de socios.
+*.sqlite3.*
+datos_sqlite.json
+datos_migrados*.json
+
 # Node
 frontend/node_modules/
 frontend/dist/

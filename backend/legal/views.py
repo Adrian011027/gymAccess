@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -16,10 +17,24 @@ def ip_de(request):
 
     Detrás de nginx/Cloudflare, REMOTE_ADDR es siempre el del proxy: sin leer
     X-Forwarded-For toda la evidencia quedaría registrada con la misma IP.
+
+    Pero la cabecera **la escribe el cliente**, y antes se tomaba tal cual: bastaba
+    con mandar `X-Forwarded-For: 1.2.3.4` para que la evidencia de consentimiento
+    (LFPDPPP) y la bitácora de accesos de soporte guardaran la IP que uno quisiera.
+    Una bitácora que el auditado puede rellenar no prueba nada.
+
+    Por eso solo se hace caso a la cabecera cuando `USAR_X_FORWARDED_FOR` está
+    activo, que es la forma de decir "hay un proxy de confianza delante y él
+    reescribe la cabecera". Sin proxy —desarrollo, o el backend expuesto directo—
+    manda `REMOTE_ADDR`, que no se puede falsificar.
+
+    Se toma el ÚLTIMO valor y no el primero: el proxy añade al final, así que los
+    de la izquierda son los que pudo haber puesto el cliente.
     """
-    reenviada = request.META.get('HTTP_X_FORWARDED_FOR', '')
-    if reenviada:
-        return reenviada.split(',')[0].strip()
+    if getattr(settings, 'USAR_X_FORWARDED_FOR', False):
+        reenviada = request.META.get('HTTP_X_FORWARDED_FOR', '')
+        if reenviada:
+            return reenviada.split(',')[-1].strip()
     return request.META.get('REMOTE_ADDR')
 
 

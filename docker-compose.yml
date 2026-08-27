@@ -1,0 +1,79 @@
+# Postgres + backend. El frontend no está aquí a propósito: ver el comentario de
+# backend/Dockerfile y `consideraciones_produccion.md`.
+#
+# NINGÚN servicio publica los puertos 80/443. En el droplet ya hay un nginx que los
+# ocupa sirviendo mxritual.com; publicarlos aquí lo tumbaría en el primer
+# `docker compose up`. El backend se expone solo en la interfaz local y el nginx del
+# host le hace proxy.
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Sin `ports`: la base solo es accesible desde la red interna de este compose.
+    # Para inspeccionarla a mano: `docker compose exec db psql -U $POSTGRES_USER`.
+    healthcheck:
+      # El backend arranca migrando; sin esperar a que Postgres acepte conexiones,
+      # el primer `up` falla por carrera y hay que relanzarlo a mano.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS}
+      DJANGO_CORS_ORIGINS: ${DJANGO_CORS_ORIGINS}
+      DJANGO_SSL_REDIRECT: ${DJANGO_SSL_REDIRECT:-1}
+      DJANGO_TRAS_PROXY: ${DJANGO_TRAS_PROXY:-1}
+      DJANGO_ADMIN_URL: ${DJANGO_ADMIN_URL}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    volumes:
+      # Las fotos de socios tienen que sobrevivir a un redespliegue: sin volumen se
+      # van con el contenedor. `staticfiles` es lo que nginx sirve en /static/.
+      - media:/app/media
+      - staticfiles:/app/staticfiles
+    ports:
+      # Solo 127.0.0.1: el puerto NO queda expuesto a internet, únicamente al nginx
+      # del host. Publicar "8001:8000" a secas lo abriría en todas las interfaces y
+      # se saltaría el firewall, que es un error fácil de cometer y difícil de ver.
+      #
+      # 8001 y no 8000 porque el 8000 ya lo ocupa `saas_agenda_backend`, el SaaS de
+      # spas, tanto en esta máquina como en el droplet compartido. Con 8000 el
+      # arranque falla con "port is already allocated" —comprobado— y, peor, en el
+      # droplet un puerto mal elegido tumba al vecino que ya está en producción.
+      - "127.0.0.1:${BACKEND_PORT:-8001}:8000"
+    # En `>` (escalar plegado) las líneas MÁS indentadas que la primera conservan su
+    # salto de línea en vez de plegarse. Partir los flags de gunicorn en una línea
+    # extra indentada hacía que `sh` recibiera tres comandos y respondiera
+    # `--bind: not found`. Con `>-` y una sola indentación, todo queda en una línea.
+    command: >-
+      sh -c "python manage.py migrate --noinput &&
+      python manage.py collectstatic --noinput &&
+      exec gunicorn gymaccess.wsgi:application --bind 0.0.0.0:8000
+      --workers 3 --timeout 60 --access-logfile - --error-logfile -"
+
+volumes:
+  postgres_data:
+  media:
+  staticfiles:

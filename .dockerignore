@@ -1,0 +1,29 @@
+# Lo que NO debe entrar en la imagen. Además del peso, aquí se evita meter secretos
+# y datos personales en capas que luego viajan a un registry.
+.env
+*.sqlite3
+*.sqlite3.*
+backups/
+backend/media/
+backend/staticfiles/
+
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# El frontend no se containeriza: sus node_modules (~918 MB) son la causa raíz del
+# disco que se llenaba en el droplet.
+frontend/
+node_modules/
+
+.git/
+.github/
+.vscode/
+.idea/
+*.md
+
+# Ojo al excluir carpetas de la raíz por nombre: existe `legal/` en la raíz y
+# también la app `backend/legal/`. Docker compara contra la ruta completa, así que
+# `legal/` no tocaría la app —pero la ambigüedad no compensa los KB que ahorra, y
+# equivocarse ahí rompe el contenedor de una forma difícil de leer.

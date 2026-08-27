@@ -214,18 +214,45 @@ class MetodoAccesoTests(BaseAPITestCase):
         self.socio = Socio.objects.create(gym=self.gym, nombre='Ana', apellido='Lopez')
 
     def test_registrar_metodo_huella(self):
-        resp = self.client.post('/api/accesos/metodos/', {
-            'socio': self.socio.id, 'tipo': 'huella', 'token': 'FP-HASH-XYZ',
+        """La huella se registra por `sincronizar-huella`, no por el ViewSet.
+
+        Este test posteaba a `/api/accesos/metodos/`, que era una segunda puerta de
+        escritura sin ninguna validación. El endpoint dedicado comprueba que el socio
+        sea de este gym y que el template no esté ya en otra persona.
+        """
+        resp = self.client.post('/api/accesos/sincronizar-huella/', {
+            'socio_id': self.socio.id, 'template': 'FP-HASH-XYZ',
         })
-        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
         self.assertEqual(MetodoAcceso.objects.filter(socio=self.socio, tipo='huella').count(), 1)
 
     def test_token_unico(self):
-        MetodoAcceso.objects.create(socio=self.socio, tipo='qr', token='DUP')
-        resp = self.client.post('/api/accesos/metodos/', {
-            'socio': self.socio.id, 'tipo': 'huella', 'token': 'DUP',
+        """El caso real: la misma huella intentando registrarse a dos personas."""
+        otro = Socio.objects.create(gym=self.gym, nombre='Beto', apellido='Ruiz')
+        MetodoAcceso.objects.create(socio=otro, tipo='huella', token='DUP')
+        resp = self.client.post('/api/accesos/sincronizar-huella/', {
+            'socio_id': self.socio.id, 'template': 'DUP',
         })
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+
+    def test_template_que_choca_con_el_propio_qr_no_revienta(self):
+        """Antes daba 500: el control excluía TODOS los métodos del socio, así que
+        la colisión con su propio QR se descubría contra el UNIQUE de la tabla."""
+        MetodoAcceso.objects.create(socio=self.socio, tipo='qr', token='DUP-PROPIO')
+        resp = self.client.post('/api/accesos/sincronizar-huella/', {
+            'socio_id': self.socio.id, 'template': 'DUP-PROPIO',
+        })
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+
+    def test_metodos_no_se_pueden_escribir(self):
+        """Recepción podía revivir el QR de un socio con los datos cancelados."""
+        metodo = MetodoAcceso.objects.create(
+            socio=self.socio, tipo='qr', token='QR-APAGADO', activo=False,
+        )
+        resp = self.client.patch(f'/api/accesos/metodos/{metodo.id}/', {'activo': True})
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        metodo.refresh_from_db()
+        self.assertFalse(metodo.activo)
 
     def test_list_metodos_scoped_to_gym(self):
         otro_socio = Socio.objects.create(gym=self.otro_gym, nombre='Pedro', apellido='Ajeno')

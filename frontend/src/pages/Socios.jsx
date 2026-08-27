@@ -18,6 +18,19 @@ const EMPTY = {
   acepta_aviso: false,
 }
 
+// Fecha LOCAL en formato YYYY-MM-DD. `toISOString()` convierte a UTC: en México
+// (UTC-6) a partir de las 18:00 devuelve el día siguiente, y una membresía que
+// empieza mañana no está vigente hoy —`Membresia.vigentes()` exige
+// `fecha_inicio <= hoy`—, así que el check-in rechazaba al socio que acababa de pagar.
+const fechaLocal = (d = new Date()) =>
+  new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+
+const enDias = dias => {
+  const d = new Date()
+  d.setDate(d.getDate() + dias)
+  return fechaLocal(d)
+}
+
 // Un menor no puede consentir el tratamiento de sus datos: lo hace quien ejerce la
 // patria potestad. Se calcula aquí y en el backend con la misma regla.
 function esMenorDeEdad(fechaNac) {
@@ -58,6 +71,24 @@ const PLAN_COLORS = {
 function planBadge(nombre) {
   const c = PLAN_COLORS[nombre] || { bg: 'rgba(139,148,158,0.15)', color: '#8b949e' }
   return c
+}
+
+// Una membresía puede no estar vigente por cuatro razones distintas, y cada una se
+// atiende distinto en el mostrador: a la vencida se le cobra la renovación, a la
+// suspendida no, y la que empieza mañana no es problema de nadie. `membresia_activa`
+// llega null en las cuatro —usa la misma definición que el check-in—, así que el
+// motivo hay que leerlo de `membresia_reciente`.
+const ESTADO_NO_VIGENTE = {
+  vencida: { texto: 'Vencida', color: '#ef4444' },
+  suspendida: { texto: 'Suspendida', color: '#f97316' },
+  pendiente_pago: { texto: 'Pendiente de pago', color: '#eab308' },
+}
+function motivoSinVigencia(m) {
+  if (!m) return null
+  // 'activa' sin ser vigente solo puede significar que aún no empieza: `vigentes()`
+  // exige además `fecha_inicio <= hoy`.
+  if (m.estado === 'activa') return { texto: `Inicia ${m.fecha_inicio}`, color: '#3b82f6' }
+  return ESTADO_NO_VIGENTE[m.estado] || { texto: m.estado, color: '#8b949e' }
 }
 
 export default function Socios() {
@@ -183,15 +214,54 @@ export default function Socios() {
   const errorDe = err => {
     const d = err.response?.data
     if (typeof d === 'object' && d) return String(Object.values(d).flat()[0])
+    // Sin `response` no vino del servidor: es un error nuestro y su mensaje ya está
+    // redactado para el mostrador.
+    if (!err.response && err.message) return err.message
     return 'Error al guardar'
   }
 
   const fechaOriginal = form.membresia_reciente?.fecha_fin || ''
+  const planOriginal = form.membresia_reciente?.plan_id ?? ''
+  const planCambiado = String(form.plan_id || '') !== String(planOriginal)
+
+  // Reapunta la membresía al plan elegido. **No recalcula la vigencia** a propósito:
+  // mover la fecha de vencimiento es regalar tiempo de gimnasio y tiene su propio
+  // camino con contraseña (`ajustar-vencimiento`). Si esto la recalculara, bastaría
+  // con "cambiar de plan" a uno más largo para saltarse esa autorización. El período
+  // nuevo lo aplica el siguiente pago, que ya lo hace en `PagoViewSet.perform_create`.
+  const aplicarPlan = async (socioId, planId, sucursalDelSocio) => {
+    if (!planCambiado || !planId) return
+    const actual = form.membresia_reciente
+    if (actual) {
+      await api.patch(`/socios/membresias/${actual.id}/`, { plan: planId })
+      return
+    }
+    // El socio no tenía membresía ("Sin plan"): se le crea una, igual que en el alta.
+    // La sucursal es la del socio, nunca `sucursales[0]`: esa suposición es la que
+    // rompe el alta en cuanto hay más de un local.
+    const sucursal = sucursalDelSocio || sucursalId
+    if (!sucursal) {
+      throw new Error('El socio no tiene sucursal asignada: asígnasela antes de darle plan.')
+    }
+    const plan = planes.find(p => p.id === Number(planId))
+    await api.post('/socios/membresias/', {
+      socio: socioId,
+      plan: planId,
+      sucursal,
+      fecha_inicio: fechaLocal(),
+      fecha_fin: plan?.duracion_dias ? enDias(plan.duracion_dias) : null,
+      estado: 'activa',
+    })
+  }
 
   const guardarSocio = async () => {
-    // plan_id y proximo_pago no son campos de Socio: se extraen solo para excluirlos.
-    const { plan_id: _p, proximo_pago: _f, ...socioData } = form
+    // proximo_pago no es campo de Socio; plan_id tampoco, pero ese sí se aplica: va
+    // por su propio endpoint.
+    const { plan_id, proximo_pago: _f, ...socioData } = form
     await api.patch(`/socios/${form.id}/`, socioData)
+    // Este camino (el que pasó por la autorización del dueño) no vuelve por `save`.
+    // Sin esta línea, cambiar plan y fecha a la vez perdía el plan en silencio.
+    await aplicarPlan(form.id, plan_id, socioData.sucursal)
   }
 
   const save = async e => {
@@ -218,15 +288,20 @@ export default function Socios() {
       socioData.sucursal = socioData.sucursal || null
       if (form.id) {
         await api.patch(`/socios/${form.id}/`, socioData)
-        toast.success('Socio actualizado')
+        // El plan va después y aparte: son dos recursos distintos. Si falla, el socio
+        // ya se guardó y hay que decirlo, no dejar un "actualizado" que miente.
+        try {
+          await aplicarPlan(form.id, plan_id, socioData.sucursal)
+          toast.success('Socio actualizado')
+        } catch (err) {
+          toast.error(`Datos guardados, pero el plan no se pudo cambiar (${errorDe(err)}).`)
+        }
       } else {
         socioData.acepta_aviso = acepta_aviso
         const { data: socio } = await api.post('/socios/', socioData)
         const plan = planes.find(p => p.id === Number(plan_id))
-        const hoy = new Date().toISOString().slice(0, 10)
-        const fin = plan?.duracion_dias
-          ? new Date(Date.now() + plan.duracion_dias * 86400000).toISOString().slice(0, 10)
-          : null
+        const hoy = fechaLocal()
+        const fin = plan?.duracion_dias ? enDias(plan.duracion_dias) : null
         try {
           await api.post('/socios/membresias/', {
             socio: socio.id,
@@ -356,10 +431,14 @@ export default function Socios() {
           </thead>
           <tbody>
             {filtered.map((s, i) => {
-              const plan = s.membresia_activa?.plan
+              // Si no hay vigente se cae a la última, no a "Sin plan": pintar igual
+              // al socio con la mensualidad vencida y al que nunca contrató nada deja
+              // a recepción sin saber a quién cobrarle y a quién venderle.
+              const ultima = s.membresia_activa || s.membresia_reciente
+              const plan = ultima?.plan
               const pc = planBadge(plan)
-              const vence = s.membresia_activa?.fecha_fin
-              const venceHoy = vence && new Date(vence).toDateString() === new Date().toDateString()
+              const vence = ultima?.fecha_fin
+              const alerta = s.membresia_activa ? null : motivoSinVigencia(s.membresia_reciente)
               return (
                 <tr key={s.id} style={{ borderBottom: i < filtered.length - 1 ? '1px solid #21262d' : undefined }}>
                   <td className="px-4 py-3">
@@ -414,14 +493,28 @@ export default function Socios() {
                   </td>
                   <td className="px-4 py-3 text-xs" style={{ color: '#8b949e' }}>{edad(s.fecha_nacimiento)}</td>
                   <td className="px-4 py-3">
-                    {plan
-                      ? <span className="text-[10px] px-2 py-0.5 rounded font-semibold" style={{ backgroundColor: pc.bg, color: pc.color }}>{plan}</span>
-                      : <span className="text-[10px]" style={{ color: '#3d444d' }}>Sin plan</span>
-                    }
+                    {plan ? (
+                      <div className="flex flex-col items-start gap-0.5">
+                        {/* El plan caducado se apaga en vez de desaparecer: sigue
+                            diciendo qué se le renueva a este socio. */}
+                        <span className="text-[10px] px-2 py-0.5 rounded font-semibold"
+                          style={{ backgroundColor: pc.bg, color: pc.color, opacity: alerta ? 0.45 : 1 }}>{plan}</span>
+                        {alerta && (
+                          <span className="text-[10px] font-semibold" style={{ color: alerta.color }}>{alerta.texto}</span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-[10px]" style={{ color: '#3d444d' }}>Sin plan</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-xs" style={{ color: '#8b949e' }}>{antiguedad(s.creado_en)}</td>
                   <td className="px-4 py-3 text-xs" style={{ color: '#8b949e' }}>{s.fecha_nacimiento || '—'}</td>
-                  <td className="px-4 py-3 text-xs font-semibold" style={{ color: vencePronto(vence) ? '#f97316' : '#8b949e' }}>
+                  {/* Sin vigencia manda el color del motivo: una fecha ya pasada en
+                      naranja de "vence pronto" leía como aviso cuando ya es un cobro
+                      atrasado. `vencePronto` mira `diff <= 3` y el pasado también lo
+                      cumple, así que el caso hay que separarlo antes. */}
+                  <td className="px-4 py-3 text-xs font-semibold"
+                    style={{ color: alerta ? alerta.color : vencePronto(vence) ? '#f97316' : '#8b949e' }}>
                     {vence || '—'}
                   </td>
                   <td className="px-4 py-3">
@@ -439,7 +532,7 @@ export default function Socios() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 4h2m-2 2h6m0-6v2m0 0h-4" />
                         </svg>
                       </button>
-                      <button onClick={() => { setForm({ ...s, proximo_pago: s.membresia_reciente?.fecha_fin || '' }); setModal(true) }} style={{ color: '#8b949e' }} className="hover:text-white transition-colors">
+                      <button onClick={() => { setForm({ ...s, proximo_pago: s.membresia_reciente?.fecha_fin || '', plan_id: s.membresia_reciente?.plan_id ?? '' }); setModal(true) }} style={{ color: '#8b949e' }} className="hover:text-white transition-colors">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                         </svg>
@@ -622,25 +715,69 @@ export default function Socios() {
                   Dónde está registrado y dónde paga. Puede entrenar en otras según la política del gym.
                 </p>
               </div>
-              {!form.id && (
-                <div>
+              <div>
+                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>
+                  PLAN {!form.id && <span style={{ color: '#f97316' }}>*</span>}
+                </label>
+                <select
+                  required={!form.id}
+                  value={form.plan_id ?? ''}
+                  onChange={e => setForm(f => ({ ...f, plan_id: e.target.value }))}
+                  className={inputCls} style={INPUT_STYLE}
+                >
+                  <option value="">{form.id ? 'Sin plan' : 'Selecciona un plan'}</option>
+                  {planes.map(p => (
+                    <option key={p.id} value={p.id}>{p.nombre} — ${p.precio}</option>
+                  ))}
+                </select>
+                {planes.length === 0 && (
+                  <p className="text-[10px] mt-1 font-semibold" style={{ color: '#f97316' }}>
+                    ⚠ No hay planes creados. Crea uno en Configuración antes de dar de alta socios.
+                  </p>
+                )}
+                {/* En edición se avisa qué hace el cambio, porque no es lo que la
+                    mayoría supone: el plan nuevo no adelanta ni retrasa el vencimiento. */}
+                {form.id && planCambiado && (
+                  <p className="text-[10px] mt-1 leading-relaxed" style={{ color: '#f97316' }}>
+                    {!form.plan_id
+                      ? '⚠ Dejarlo en «Sin plan» no borra la membresía actual: para eso, cámbiala desde Membresías.'
+                      : form.membresia_reciente
+                        ? '⚠ El plan nuevo se cobra en el siguiente pago. La fecha de vencimiento actual no se mueve.'
+                        : '⚠ Se le creará una membresía activa desde hoy con este plan.'}
+                  </p>
+                )}
+              </div>
+              {/* Solo en edición: un alta nace activa, y ofrecer lo contrario invita a
+                  registrar a alguien que no puede entrar el mismo día que se apuntó.
+                  La baja de aquí es reversible; la irreversible es «Cancelar datos». */}
+              {form.id && (
+                <div className="rounded-lg p-3" style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
                   <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>
-                    PLAN <span style={{ color: '#f97316' }}>*</span>
+                    ESTADO
                   </label>
                   <select
-                    required
-                    value={form.plan_id}
-                    onChange={e => setForm(f => ({ ...f, plan_id: e.target.value }))}
-                    className={inputCls} style={INPUT_STYLE}
+                    value={form.activo === false ? 'inactivo' : 'activo'}
+                    onChange={e => setForm(f => ({ ...f, activo: e.target.value === 'activo' }))}
+                    disabled={!!form.anonimizado_en}
+                    className={inputCls}
+                    style={{ ...INPUT_STYLE, opacity: form.anonimizado_en ? 0.5 : 1 }}
                   >
-                    <option value="">Selecciona un plan</option>
-                    {planes.map(p => (
-                      <option key={p.id} value={p.id}>{p.nombre} — ${p.precio}</option>
-                    ))}
+                    <option value="activo">Activo</option>
+                    <option value="inactivo">Inactivo</option>
                   </select>
-                  {planes.length === 0 && (
-                    <p className="text-[10px] mt-1 font-semibold" style={{ color: '#f97316' }}>
-                      ⚠ No hay planes creados. Crea uno en Configuración antes de dar de alta socios.
+                  {form.anonimizado_en ? (
+                    <p className="text-[10px] mt-1.5 leading-relaxed" style={{ color: '#8b949e' }}>
+                      Sus datos personales ya fueron cancelados: este socio no se reactiva desde aquí.
+                    </p>
+                  ) : (
+                    <p className="text-[10px] mt-1.5 leading-relaxed" style={{ color: '#8b949e' }}>
+                      Inactivo es una baja reversible: conserva sus datos, su historial y su membresía.
+                      Para borrar sus datos personales está «Cancelar datos», que no tiene vuelta atrás.
+                    </p>
+                  )}
+                  {form.activo === false && !form.anonimizado_en && (
+                    <p className="text-[10px] mt-1 font-semibold leading-relaxed" style={{ color: '#f97316' }}>
+                      ⚠ Dejará de aparecer en la búsqueda por nombre del check-in y en el filtro «Activos».
                     </p>
                   )}
                 </div>

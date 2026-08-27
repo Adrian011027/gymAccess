@@ -1,4 +1,3 @@
-import random
 from datetime import timedelta
 
 from django.db import models, transaction
@@ -8,7 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
-from accesos.models import MetodoAcceso
+from accesos.models import MetodoAcceso, generar_token_qr
 from usuarios.models import Usuario
 from usuarios.permissions import ROLES_ADMIN, AdminOSoloLectura, EsAdminGym
 from usuarios.scoping import SucursalScopedMixin
@@ -26,6 +25,20 @@ class PlanViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Plan.objects.filter(gym_id=self.request.user.gym_id, activo=True)
+
+    def perform_create(self, serializer):
+        """El gym lo pone el servidor.
+
+        `PlanSerializer` es `fields = '__all__'` y no había `perform_create`: un POST
+        con `gym` ajeno se guardaba con 201 en el catálogo del negocio de al lado y
+        desaparecía de la vista de quien lo creó, así que el atacado lo veía aparecer
+        sin explicación.
+        """
+        serializer.save(gym_id=self.request.user.gym_id)
+
+    def perform_update(self, serializer):
+        # Un plan no se muda de gimnasio: el PATCH es la misma escritura cruzada.
+        serializer.save(gym_id=serializer.instance.gym_id)
 
 
 class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
@@ -83,7 +96,7 @@ class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
         MetodoAcceso.objects.create(
             socio=socio,
             tipo='qr',
-            token=f'R3B-QR-{socio.id:05d}-{random.randint(1000, 9999)}',
+            token=generar_token_qr(socio.id),
         )
         self.registrar_consentimiento(socio, acepta_aviso)
 
@@ -399,3 +412,11 @@ class GastoViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         self.validar_escritura(serializer.validated_data.get('sucursal'))
         serializer.save(gym_id=self.request.user.gym_id, registrado_por=self.request.user)
+
+    def perform_update(self, serializer):
+        # El alta validaba la sucursal y fijaba el gym; la edición no hacía ninguna
+        # de las dos cosas, que es la mitad del agujero por la que se cuela un gasto
+        # movido al negocio de al lado.
+        if 'sucursal' in serializer.validated_data:
+            self.validar_escritura(serializer.validated_data.get('sucursal'))
+        serializer.save(gym_id=serializer.instance.gym_id)

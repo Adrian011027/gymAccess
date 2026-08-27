@@ -1,4 +1,3 @@
-import random
 from datetime import timedelta
 
 from django.db import models
@@ -9,7 +8,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .models import Acceso, MetodoAcceso
+from .models import Acceso, MetodoAcceso, generar_token_qr
 from .serializers import AccesoSerializer, MetodoAccesoSerializer
 from gyms.models import Sucursal
 from socios.models import Membresia, Socio
@@ -36,7 +35,24 @@ def autorizador_del_gym(gym_id, password):
     return encontrado
 
 
-class MetodoAccesoViewSet(viewsets.ModelViewSet):
+class MetodoAccesoViewSet(viewsets.ReadOnlyModelViewSet):
+    """Solo lectura: los métodos de acceso se crean por su propio camino.
+
+    Era un `ModelViewSet` completo con `fields = '__all__'` y solo `IsAuthenticated`,
+    sin validar nada al escribir. Eso daba tres cosas a cualquier empleado:
+
+    - **Revivir el QR de un socio con los datos cancelados**: un
+      `PATCH {"activo": true}` deshacía la parte de `cancelar_datos` que le cierra la
+      puerta. Verificado: devolvía 200.
+    - **Fijar el token que quisiera**, es decir clonar la credencial de otro.
+    - **Apuntar un método al socio de otro gimnasio**, porque el filtro por gym
+      estaba solo en la lectura.
+
+    El alta legítima pasa por `AsignarQRView` y `SincronizarHuellaView`, que sí
+    comprueban que el socio sea de este gym. El frontend no usa este endpoint para
+    escribir.
+    """
+
     serializer_class = MetodoAccesoSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -67,6 +83,19 @@ class AsignarQRView(APIView):
                 {'socio_id': 'Socio no encontrado.'}, status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Un socio dado de baja no recibe credencial nueva. Sin esto, «Asignar QR»
+        # deshacía `cancelar_datos` sin que nadie lo notara: esa cancelación apaga
+        # los métodos existentes, así que la búsqueda de abajo no encontraba ninguno
+        # activo y creaba uno nuevo, activo. Encontrado ocurrido de verdad en la base
+        # de pruebas —un socio anonimizado con un QR emitido después de su
+        # cancelación—.
+        if not socio.activo:
+            return Response(
+                {'socio_id': 'El socio está dado de baja: reactívalo antes de darle '
+                             'un código de acceso.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         metodo = socio.metodos_acceso.filter(tipo='qr', activo=True).first()
         if metodo:
             return Response(MetodoAccesoSerializer(metodo).data, status=status.HTTP_200_OK)
@@ -74,7 +103,7 @@ class AsignarQRView(APIView):
         # El token es único a nivel tabla: se reintenta ante una colisión del azar en
         # vez de devolver un 500 por IntegrityError.
         for _ in range(10):
-            token = f'R3B-QR-{socio.id:05d}-{random.randint(1000, 9999)}'
+            token = generar_token_qr(socio.id)
             if not MetodoAcceso.objects.filter(token=token).exists():
                 metodo = MetodoAcceso.objects.create(socio=socio, tipo='qr', token=token)
                 return Response(
@@ -103,7 +132,14 @@ class SincronizarHuellaView(APIView):
         except Socio.DoesNotExist:
             return Response({'error': 'Socio no encontrado'}, status=status.HTTP_404_NOT_FOUND)
 
-        if MetodoAcceso.objects.filter(token=template).exclude(socio=socio).exists():
+        # Se excluye exactamente la fila que este `update_or_create` va a sobrescribir,
+        # no todas las del socio: con `.exclude(socio=socio)` a secas, un template que
+        # coincidiera con OTRO método del mismo socio (su propio QR) pasaba el control
+        # y reventaba después contra el UNIQUE de la tabla con un 500. Sigue siendo
+        # idempotente al resincronizar la misma huella del mismo socio.
+        if MetodoAcceso.objects.filter(token=template).exclude(
+            socio=socio, tipo='huella',
+        ).exists():
             return Response({'error': 'Esta huella ya está registrada a otro socio'}, status=status.HTTP_409_CONFLICT)
 
         metodo, _ = MetodoAcceso.objects.update_or_create(
@@ -220,6 +256,33 @@ class CheckInView(APIView):
             )
 
         socio = metodo.socio
+
+        # Un socio dado de baja no entra, tenga la membresía que tenga.
+        #
+        # Esta comprobación no existía: el check-in miraba la vigencia de la
+        # membresía pero nunca `socio.activo`, así que alguien dado de baja con la
+        # mensualidad todavía corriendo abría la puerta. Verificado antes del
+        # arreglo: `acceso: permitido`.
+        #
+        # Va ANTES de la membresía a propósito. Si fuera después, a un socio de baja
+        # y además vencido se le diría "membresía vencida", y en el mostrador eso se
+        # atiende cobrándole —volviendo a activar a quien se quiso dar de baja—.
+        #
+        # `motivo_denegado='suspendido'` ya existía en el modelo desde el principio y
+        # ningún código lo escribía nunca: la casilla estaba prevista, la regla no.
+        if not socio.activo:
+            Acceso.objects.create(
+                socio=socio,
+                sucursal=sucursal,
+                metodo_usado=metodo.tipo,
+                resultado='denegado',
+                motivo_denegado='suspendido',
+            )
+            return Response({
+                'acceso': 'denegado',
+                'socio': f'{socio.nombre} {socio.apellido}',
+                'motivo': 'socio dado de baja: no tiene acceso',
+            }, status=status.HTTP_403_FORBIDDEN)
 
         membresia = Membresia.objects.vigentes().filter(socio=socio).first()
 

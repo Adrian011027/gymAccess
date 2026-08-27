@@ -19,6 +19,12 @@ const USER_EMPTY = {
   sucursales_permitidas: [], horario_semanal: {},
 }
 
+// Etiquetas de los roles de `Usuario.ROL_CHOICES`. Un rol que se agregue en el
+// backend sigue apareciendo en el filtro por su clave cruda, no se pierde.
+const ROLES = {
+  superadmin: 'Super admin', admin: 'Admin', recepcion: 'Recepción', coach: 'Coach',
+}
+
 export default function Empleados() {
   const { user } = useAuth()
   const [sucursales, setSucursales] = useState([])
@@ -33,6 +39,7 @@ export default function Empleados() {
   const [bajaTexto, setBajaTexto] = useState('')
   const [bajaError, setBajaError] = useState('')
   const [bajaLoading, setBajaLoading] = useState(false)
+  const [filtroRol, setFiltroRol] = useState('todos')
 
   const cargarSucursales = () => api.get('/gyms/sucursales/').then(r => setSucursales(r.data)).catch(() => {})
   const cargarUsuarios = () => api.get('/usuarios/').then(r => setUsuarios(r.data)).catch(() => {})
@@ -49,6 +56,11 @@ export default function Empleados() {
     if (typeof d === 'object' && d) return Object.values(d).flat()[0]
     return 'No se pudo guardar'
   }
+
+  // Solo se ofrecen los roles que existen en la plantilla: una pestaña que siempre
+  // da vacío es ruido, y el conteo delata de inmediato si falta cubrir un puesto.
+  const rolesPresentes = [...new Set(usuarios.map(u => u.rol))].sort()
+  const visibles = filtroRol === 'todos' ? usuarios : usuarios.filter(u => u.rol === filtroRol)
 
   const abrirNuevo = () => { setUserForm(USER_EMPTY); setUserModal(true) }
 
@@ -158,8 +170,28 @@ export default function Empleados() {
             + Nuevo empleado
           </button>
         </div>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {[['todos', 'Todos'], ...rolesPresentes.map(r => [r, ROLES[r] ?? r])].map(([clave, etiqueta]) => {
+            const n = clave === 'todos' ? usuarios.length : usuarios.filter(u => u.rol === clave).length
+            const activo = filtroRol === clave
+            return (
+              <button
+                key={clave}
+                onClick={() => setFiltroRol(clave)}
+                className="px-3 py-1.5 rounded-lg text-[10px] font-bold tracking-wide transition-colors"
+                style={{
+                  backgroundColor: activo ? '#22c55e' : '#0d1117',
+                  color: activo ? '#0d1117' : '#8b949e',
+                  border: `1px solid ${activo ? '#22c55e' : '#21262d'}`,
+                }}
+              >
+                {etiqueta} <span style={{ opacity: 0.7 }}>{n}</span>
+              </button>
+            )
+          })}
+        </div>
         <div className="space-y-2">
-          {usuarios.map(u => (
+          {visibles.map(u => (
             <div key={u.id} className="flex items-center justify-between rounded-lg px-4 py-3 flex-wrap gap-2"
               style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
               <div className="min-w-0">
@@ -167,7 +199,7 @@ export default function Empleados() {
                 <p className="text-[10px] truncate" style={{ color: '#8b949e' }}>{u.email}</p>
               </div>
               <div className="flex items-center gap-3 shrink-0">
-                <span className="text-[10px] capitalize" style={{ color: '#8b949e' }}>{u.rol}</span>
+                <span className="text-[10px]" style={{ color: '#8b949e' }}>{ROLES[u.rol] ?? u.rol}</span>
                 <span className="text-[10px] font-semibold" style={{ color: u.sucursales_permitidas?.length ? '#f97316' : '#22c55e' }}>
                   {u.sucursales_permitidas?.length
                     ? sucursales.filter(s => u.sucursales_permitidas.includes(s.id)).map(s => s.nombre).join(', ')
@@ -193,8 +225,10 @@ export default function Empleados() {
               </div>
             </div>
           ))}
-          {usuarios.length === 0 && (
-            <p className="text-xs text-center py-4" style={{ color: '#3d444d' }}>Sin empleados</p>
+          {visibles.length === 0 && (
+            <p className="text-xs text-center py-4" style={{ color: '#3d444d' }}>
+              {usuarios.length === 0 ? 'Sin empleados' : `Ningún empleado con rol ${ROLES[filtroRol] ?? filtroRol}`}
+            </p>
           )}
         </div>
       </div>

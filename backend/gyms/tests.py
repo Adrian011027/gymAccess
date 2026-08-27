@@ -179,9 +179,31 @@ class MultitenantGymTests(BaseAPITestCase):
         self.assertEqual(self.otro_gym.nombre, 'Otro Gym')
 
     def test_admin_no_puede_borrar_otro_gym(self):
+        # 405 y ya no 404: el DELETE no existe para nadie, así que ni siquiera se
+        # llega a resolver si el gym es visible. La garantía es más fuerte que la
+        # que pedía este test.
         resp = self.client.delete(f'/api/gyms/{self.otro_gym.id}/')
-        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         self.assertTrue(Gym.objects.filter(id=self.otro_gym.id).exists())
+
+    def test_admin_no_puede_borrar_su_propio_gym(self):
+        """El agujero que este módulo no cubría.
+
+        Borrar *otro* gym ya estaba probado, pero el propio no: `AdminOSoloLectura`
+        permite cualquier método a un admin y el gym propio sí está en su queryset,
+        así que el DELETE devolvía 204 y se llevaba en cascada sucursales, socios,
+        membresías, pagos, accesos y usuarios —justo lo que el panel del SaaS
+        prohíbe citando los cinco años de conservación fiscal del CFF—.
+        """
+        resp = self.client.delete(f'/api/gyms/{self.gym.id}/')
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.assertTrue(Gym.objects.filter(id=self.gym.id).exists())
+
+    def test_admin_no_puede_crear_gyms(self):
+        """Dar de alta un gimnasio es dar de alta un cliente del SaaS."""
+        resp = self.client.post('/api/gyms/', {'nombre': 'Gym Pirata', 'tipo': 'mixto'})
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.assertFalse(Gym.objects.filter(nombre='Gym Pirata').exists())
 
     def test_sucursales_de_otro_gym_ocultas(self):
         Sucursal.objects.create(gym=self.otro_gym, nombre='Sucursal Ajena')

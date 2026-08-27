@@ -14,7 +14,7 @@ class UsuarioScopeTests(BaseAPITestCase):
 
     def test_admin_create_user_scoped_to_own_gym(self):
         resp = self.client.post('/api/usuarios/', {
-            'email': 'nuevo@round3.com', 'password': 'Passw0rd1', 'nombre': 'Nuevo',
+            'email': 'nuevo@round3.com', 'password': 'tejocote-ancla-71', 'nombre': 'Nuevo',
             'rol': 'recepcion', 'sucursal': self.sucursal.id,
         })
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
@@ -32,10 +32,10 @@ class UsuarioScopeTests(BaseAPITestCase):
 
     def test_password_is_hashed_on_create(self):
         resp = self.client.post('/api/usuarios/', {
-            'email': 'nuevo2@round3.com', 'password': 'Passw0rd1', 'nombre': 'Nuevo',
+            'email': 'nuevo2@round3.com', 'password': 'tejocote-ancla-71', 'nombre': 'Nuevo',
             'rol': 'recepcion', 'sucursal': self.sucursal.id,
         })
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         creado = Usuario.objects.get(email='nuevo2@round3.com')
-        self.assertNotEqual(creado.password, 'Passw0rd1')
-        self.assertTrue(creado.check_password('Passw0rd1'))
+        self.assertNotEqual(creado.password, 'tejocote-ancla-71')
+        self.assertTrue(creado.check_password('tejocote-ancla-71'))

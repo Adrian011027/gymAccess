@@ -202,7 +202,7 @@ class AlcanceEscrituraTests(BaseDosSucursales):
         ajena = Sucursal.objects.create(gym=self.otro_gym, nombre='Ajena')
         resp = self.client.post('/api/usuarios/', {
             'email': 'x@round3.com', 'nombre': 'X', 'rol': 'recepcion',
-            'gym': self.gym.id, 'sucursal': ajena.id, 'password': 'Passw0rd1',
+            'gym': self.gym.id, 'sucursal': ajena.id, 'password': 'tejocote-ancla-71',
         })
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 

@@ -265,12 +265,31 @@ class CheckInPorEstadoTests(MembresiaBase):
         self.crear_socio('Libre', estado='activa', fecha_fin=False)
         self.assertEqual(self._checkin('QR-LIBRE').status_code, status.HTTP_200_OK)
 
-    def test_socio_dado_de_baja_con_membresia_activa_entra(self):
-        """Documenta el comportamiento actual: el check-in no mira Socio.activo,
-        solo la membresía. Dar de baja a un socio no le cierra la puerta."""
-        self.crear_socio('Baja', estado='activa', activo=False,
-                         fecha_fin=HOY() + timedelta(days=30))
-        self.assertEqual(self._checkin('QR-BAJA').status_code, status.HTTP_200_OK)
+    def test_socio_dado_de_baja_con_membresia_activa_no_entra(self):
+        """Dar de baja a un socio le cierra la puerta, tenga la membresía que tenga.
+
+        Este test afirmaba lo contrario y su docstring lo decía sin rodeos: «el
+        check-in no mira Socio.activo». Era un test de caracterización —dejaba por
+        escrito el comportamiento que había, no el que se quería—, así que al cerrar
+        el hueco se invierte en vez de borrarse: el caso sigue cubierto, ahora con el
+        resultado correcto.
+        """
+        socio, _ = self.crear_socio('Baja', estado='activa', activo=False,
+                                    fecha_fin=HOY() + timedelta(days=30))
+        resp = self._checkin('QR-BAJA')
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Acceso.objects.get(socio=socio).motivo_denegado, 'suspendido')
+
+    def test_baja_pesa_mas_que_la_membresia_vencida(self):
+        """El motivo importa: a un socio de baja Y vencido se le dice que está de
+        baja, no que debe. Si dijera «membresía vencida», en el mostrador lo
+        atenderían cobrándole, que es justo reactivar a quien se dio de baja."""
+        socio, _ = self.crear_socio('BajaVencida', estado='vencida', activo=False,
+                                    fecha_inicio=HOY() - timedelta(days=60),
+                                    fecha_fin=HOY() - timedelta(days=1))
+        self.assertEqual(self._checkin('QR-BAJAVENCIDA').status_code,
+                         status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Acceso.objects.get(socio=socio).motivo_denegado, 'suspendido')
 
     def test_vencida_genera_notificacion_de_cobranza(self):
         from notificaciones.models import Notificacion

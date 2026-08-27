@@ -28,6 +28,10 @@ class GymSerializer(serializers.ModelSerializer):
     class Meta:
         model = Gym
         fields = '__all__'
+        # `activo` es la palanca de cobranza del SaaS (suspender / reactivar un
+        # cliente), no una preferencia del gimnasio: se cambia desde
+        # `/api/saas/tenants/<id>/suspender/` y en ningún otro sitio.
+        read_only_fields = ['activo']
 
     def validate_horario(self, value):
         """Valida el horario semanal y sus descansos.

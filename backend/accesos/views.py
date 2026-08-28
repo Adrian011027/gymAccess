@@ -77,7 +77,7 @@ class AsignarQRView(APIView):
                 {'socio_id': 'Indica el socio.'}, status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            socio = Socio.objects.get(id=socio_id, gym_id=request.user.gym_id)
+            socio = Socio.objects.vivos().get(id=socio_id, gym_id=request.user.gym_id)
         except (Socio.DoesNotExist, ValueError, TypeError):
             return Response(
                 {'socio_id': 'Socio no encontrado.'}, status=status.HTTP_404_NOT_FOUND,
@@ -128,7 +128,7 @@ class SincronizarHuellaView(APIView):
             return Response({'error': 'socio_id y template son requeridos'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            socio = Socio.objects.get(id=socio_id, gym_id=request.user.gym_id)
+            socio = Socio.objects.vivos().get(id=socio_id, gym_id=request.user.gym_id)
         except Socio.DoesNotExist:
             return Response({'error': 'Socio no encontrado'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -183,7 +183,7 @@ class BuscarSocioView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        qs = Socio.objects.filter(
+        qs = Socio.objects.vivos().filter(
             gym_id=request.user.gym_id, activo=True,
         ).select_related('sucursal').prefetch_related('metodos_acceso')
 

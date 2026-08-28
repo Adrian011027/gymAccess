@@ -44,21 +44,72 @@ class PlanViewSet(viewsets.ModelViewSet):
 
 
 class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
-    """Los socios NO se acotan por sucursal a propósito.
+    """El listado se acota a la sucursal del usuario; la búsqueda no.
 
-    El socio le paga al negocio, no al local: si recepción de Norte no pudiera ver al
-    socio de Centro que viene de visita, no podría ni buscarlo ni atenderlo. Quién
-    puede *entrar* a qué sucursal lo decide la política del gym en el check-in;
-    aquí solo se expone de qué sucursal es, para que se note en pantalla.
+    Antes el listado no se acotaba en absoluto, para que recepción pudiera atender al
+    socio de otro local que viene de visita. El efecto es que recepción abría /socios y
+    veía el padrón entero del negocio, que no es lo que debe tener delante.
+
+    Se resuelve separando los dos casos: sin `?buscar=`, cada quien ve su sucursal.
+    Con `?buscar=`, se recorre el gym completo, porque encontrar al visitante en el
+    mostrador es justamente el caso que el alcance estricto rompería. El detalle de un
+    socio (`retrieve`/`update`) tampoco se acota: si la búsqueda lo encontró, abrirlo
+    tiene que funcionar. Quién puede *entrar* a qué sucursal lo sigue decidiendo el
+    check-in; esto es solo qué se ve en pantalla.
     """
 
     serializer_class = SocioSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_permissions(self):
+        # Dar de baja a un socio es del dueño, no del mostrador. Recepción sigue
+        # pudiendo dar de alta y editar; eliminar no. Se hace aquí y no solo
+        # ocultando el botón: un botón escondido no es un permiso, el endpoint
+        # seguiría contestando a un DELETE hecho a mano.
+        if self.action == 'destroy':
+            return [permissions.IsAuthenticated(), EsAdminGym()]
+        return super().get_permissions()
+
     def get_queryset(self):
-        return Socio.objects.filter(
+        qs = Socio.objects.filter(
             gym_id=self.request.user.gym_id
         ).select_related('sucursal').prefetch_related('metodos_acceso')
+        # `restaurar` tiene que poder alcanzar justamente al que está eliminado, y el
+        # resto de acciones de detalle operan sobre socios vivos: filtrarlas aquí
+        # devolvería 404 al intentar deshacer una baja.
+        if self.action == 'restaurar':
+            return qs
+        # Sin una forma de listarlos, `restaurar` seria inalcanzable: nadie sabria que
+        # id pedir. Solo para admins, y nunca por defecto.
+        ve_bajas = (
+            self.action == 'list'
+            and self.request.query_params.get('incluir_eliminados') == '1'
+            and self.request.user.rol in ROLES_ADMIN
+        )
+        if not ve_bajas:
+            qs = qs.vivos()
+        if self.action != 'list':
+            return qs
+
+        buscar = self.request.query_params.get('buscar', '').strip()
+        if not buscar:
+            return self.scope_sucursal(qs)
+
+        # Cada palabra debe aparecer en algún campo, no la cadena entera en uno solo:
+        # si no, "Juan Pérez" no encuentra a nadie, porque ningún `nombre` contiene el
+        # apellido. `numero_socio` es entero y `icontains` obligaría a castear en SQL,
+        # así que se compara exacto y solo cuando lo tecleado son dígitos.
+        criterio = models.Q()
+        for palabra in buscar.split():
+            parcial = (
+                models.Q(nombre__icontains=palabra)
+                | models.Q(apellido__icontains=palabra)
+                | models.Q(email__icontains=palabra)
+            )
+            if palabra.isdigit():
+                parcial |= models.Q(numero_socio=int(palabra))
+            criterio &= parcial
+        return qs.filter(criterio)
 
     @transaction.atomic
     def perform_create(self, serializer):
@@ -135,6 +186,54 @@ class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
         if 'sucursal' in serializer.validated_data:
             self.validar_escritura(serializer.validated_data.get('sucursal'))
         serializer.save()
+
+    def perform_destroy(self, instance):
+        """Baja lógica del socio: no se borra la fila.
+
+        Un DELETE real arrastraba por cascada `Membresia` -> `Pago` (que la obligación
+        fiscal manda conservar 5 años), `ConsentimientoSocio` (la evidencia de que
+        aceptó el aviso, que es lo único que convierte el aviso en defensa ante el
+        INAI) y `Acceso` (la bitácora de quién entró al local). Se marca la baja y se
+        desactivan sus métodos de acceso, que es el efecto que se busca: deja de
+        aparecer y deja de abrir la puerta.
+
+        No se anonimiza: eso es el derecho de cancelación (`cancelar-datos`), es
+        irreversible y exige contraseña de admin. Esto es reversible con `restaurar`.
+        """
+        # Inalcanzable por la API (`get_queryset` ya filtro los eliminados, asi que un
+        # segundo DELETE da 404 antes de llegar aqui). Se deja como red por si alguien
+        # llama a `perform_destroy` desde otro sitio: borrar dos veces pisaria
+        # `eliminado_por` y la fecha original de la baja.
+        if instance.eliminado_en:
+            raise ValidationError({'socio': 'Este socio ya estaba dado de baja.'})
+        with transaction.atomic():
+            instance.eliminado_en = timezone.now()
+            instance.eliminado_por = self.request.user
+            # `activo=False` además de la marca de baja: los conteos del panel y del
+            # SaaS filtran por `activo`, y sin esto un socio eliminado seguiría
+            # sumando como socio activo del gym.
+            instance.activo = False
+            instance.save(update_fields=['eliminado_en', 'eliminado_por', 'activo'])
+            # El QR deja de abrir: el check-in busca `MetodoAcceso.activo=True`.
+            instance.metodos_acceso.update(activo=False)
+
+    @action(detail=True, methods=['post'],
+            permission_classes=[permissions.IsAuthenticated, EsAdminGym])
+    def restaurar(self, request, pk=None):
+        """Deshace la baja lógica. Sin esto, `destroy` sería irreversible en la práctica."""
+        socio = self.get_object()
+        if not socio.eliminado_en:
+            raise ValidationError({'socio': 'Este socio no está dado de baja.'})
+        with transaction.atomic():
+            socio.eliminado_en = None
+            socio.eliminado_por = None
+            socio.activo = True
+            socio.save(update_fields=['eliminado_en', 'eliminado_por', 'activo'])
+            # Se reactiva solo el QR: si tenía otros métodos desactivados a mano antes
+            # de la baja, reactivarlos todos revertiría decisiones que nadie pidió
+            # deshacer.
+            socio.metodos_acceso.filter(tipo='qr').update(activo=True)
+        return Response(SocioSerializer(socio).data, status=status.HTTP_200_OK)
 
     # --- Derechos ARCO (LFPDPPP) -------------------------------------------------
     # El socio puede pedir ver sus datos y pedir que se borren. La ley da 20 días
@@ -248,8 +347,14 @@ class MembresiaViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        # `socio__eliminado_en__isnull=True`: la membresia de un socio dado de baja
+        # seguia apareciendo en "Por cobrar" de /pagos, de modo que recepcion veia una
+        # deuda de alguien que ya no existe en el listado y no podia hacer nada con ella.
         return self.scope_sucursal(
-            Membresia.objects.filter(socio__gym_id=self.request.user.gym_id)
+            Membresia.objects.filter(
+                socio__gym_id=self.request.user.gym_id,
+                socio__eliminado_en__isnull=True,
+            )
         ).select_related('socio', 'plan').prefetch_related(
             models.Prefetch(
                 'plan__precios_sucursal',

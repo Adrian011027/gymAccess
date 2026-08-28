@@ -68,6 +68,17 @@ class PrecioPlanSucursal(models.Model):
         return f'{self.plan.nombre} @ {self.sucursal.nombre}: ${self.precio}'
 
 
+class SocioQuerySet(models.QuerySet):
+    def vivos(self):
+        """Los que no están dados de baja lógicamente.
+
+        Definición única de "existe" para todo el sistema, igual que
+        `MembresiaQuerySet.vigentes()`: si cada módulo la reescribe, el socio dado de
+        baja termina desapareciendo del listado pero siguiendo en el check-in.
+        """
+        return self.filter(eliminado_en__isnull=True)
+
+
 class Socio(models.Model):
     SEXO_CHOICES = [('M', 'Masculino'), ('F', 'Femenino'), ('O', 'Otro')]
 
@@ -103,6 +114,19 @@ class Socio(models.Model):
     # se borran, pero el registro sobrevive anonimizado porque de él cuelgan pagos
     # que la obligación fiscal manda conservar.
     anonimizado_en = models.DateTimeField(null=True, blank=True)
+    # Baja lógica. NO es lo mismo que `activo=False`: ese es un socio que existe pero
+    # no está al corriente, y sigue saliendo en el filtro "Inactivos" del listado.
+    # Esto es "se eliminó": desaparece de la interfaz, pero la fila sobrevive porque de
+    # ella cuelgan pagos (CFF art. 30 obliga a conservarlos 5 años), consentimientos
+    # que prueban el cumplimiento de la LFPDPPP, y la bitácora de accesos. Un DELETE
+    # real se llevaba las cuatro cosas por cascada.
+    eliminado_en = models.DateTimeField(null=True, blank=True)
+    eliminado_por = models.ForeignKey(
+        'usuarios.Usuario', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='socios_eliminados',
+    )
+
+    objects = SocioQuerySet.as_manager()
 
     class Meta:
         db_table = 'socios'

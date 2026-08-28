@@ -18,6 +18,17 @@ const CATEGORIAS_GASTO = [
 ]
 const GASTO_EMPTY = { categoria: 'otro', descripcion: '', monto: '', fecha: new Date().toISOString().split('T')[0] }
 
+// Etiqueta de urgencia de una membresía por cobrar. En la lista combinada el
+// "Vence: <fecha>" suelto no distingue al que lleva tres semanas atrasado del que
+// vence el viernes, que es justo lo que hay que ver de un vistazo.
+function urgencia(m, hoy) {
+  if (!m.fecha_fin) return { texto: 'Pendiente de pago', color: '#f97316' }
+  const dias = Math.round((new Date(m.fecha_fin) - new Date(hoy)) / 86400000)
+  if (dias < 0) return { texto: `Atrasado ${-dias} día${dias === -1 ? '' : 's'}`, color: '#ef4444' }
+  if (dias === 0) return { texto: 'Vence hoy', color: '#f97316' }
+  return { texto: `Vence en ${dias} día${dias === 1 ? '' : 's'}`, color: '#8b949e' }
+}
+
 function horaDe(fechaISO) {
   return new Date(fechaISO).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
 }
@@ -28,7 +39,7 @@ export default function Pagos() {
   const [vista, setVista] = useState('pendientes') // pendientes | registro | gastos
 
   const [membresias, setMembresias] = useState([])
-  const [tab, setTab] = useState(searchParams.get('tab') || 'hoy')
+  const [tab, setTab] = useState(searchParams.get('tab') || 'todos')
   const [loading, setLoading] = useState(false)
   const [confirmar, setConfirmar] = useState(null)
   const [monto, setMonto] = useState('')
@@ -60,6 +71,18 @@ export default function Pagos() {
   // Si la fecha ya pasó la membresía está atrasada, sin importar el estado guardado:
   // una que quedó marcada 'activa' con fecha vencida es justo la que hay que cobrar.
   const atrasados  = membresias.filter(m => m.fecha_fin && m.fecha_fin < hoy)
+  // Todo lo cobrable en una sola lista, sin repetir (un atrasado tambien cae en
+  // pendHoy si quedo en 'pendiente_pago'). Es la vista por defecto: con "Hoy"
+  // primero, un socio atrasado desde hace semanas no aparecia hasta que alguien
+  // abria esa pestana, y nadie la abre si no sabe que hay algo dentro.
+  // Orden por fecha_fin ascendente = lo mas vencido primero; sin fecha, al final.
+  const porCobrar = [...new Map(
+    [...atrasados, ...pendHoy, ...pendSem].map(m => [m.id, m])
+  ).values()].sort((a, b) => {
+    if (!a.fecha_fin) return 1
+    if (!b.fecha_fin) return -1
+    return a.fecha_fin < b.fecha_fin ? -1 : a.fecha_fin > b.fecha_fin ? 1 : 0
+  })
 
   const abrirConfirmacion = mem => {
     setConfirmar(mem)
@@ -97,12 +120,16 @@ export default function Pagos() {
   }
 
   const tabs = [
+    { key: 'todos',     label: `Por cobrar (${porCobrar.length})` },
     { key: 'hoy',       label: `Hoy (${pendHoy.length})` },
     { key: 'semana',    label: `Esta semana (${pendSem.length})` },
     { key: 'atrasados', label: `Atrasados (${atrasados.length})` },
   ]
 
-  const lista = tab === 'hoy' ? pendHoy : tab === 'semana' ? pendSem : atrasados
+  const lista = tab === 'todos' ? porCobrar
+    : tab === 'hoy' ? pendHoy
+    : tab === 'semana' ? pendSem
+    : atrasados
 
   const totalCobradoMes = membresias
     .filter(m => m.estado === 'activa')
@@ -195,7 +222,11 @@ export default function Pagos() {
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-white">{m.socio_nombre}</p>
-                    <p className="text-[10px]" style={{ color: '#8b949e' }}>{m.plan_nombre} · Vence: {m.fecha_fin}</p>
+                    <p className="text-[10px]" style={{ color: '#8b949e' }}>{m.plan_nombre} · Vence: {m.fecha_fin || '—'}</p>
+                    <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold"
+                      style={{ color: urgencia(m, hoy).color, backgroundColor: `${urgencia(m, hoy).color}1a` }}>
+                      {urgencia(m, hoy).texto}
+                    </span>
                   </div>
                 </div>
                 <div className="flex items-center gap-4">

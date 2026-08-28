@@ -108,6 +108,8 @@ export default function Socios() {
   const [aviso, setAviso] = useState(null)
   const [leyendoAviso, setLeyendoAviso] = useState(false)
   // Derechos ARCO: el socio puede pedir ver sus datos y pedir que se borren.
+  const [eliminando, setEliminando] = useState(null)
+  const [eliminandoLoading, setEliminandoLoading] = useState(false)
   const [cancelando, setCancelando] = useState(null)
   const [cancelPass, setCancelPass] = useState('')
   const [cancelTexto, setCancelTexto] = useState('')
@@ -121,9 +123,22 @@ export default function Socios() {
   const [authLoading, setAuthLoading] = useState(false)
   const [authError, setAuthError] = useState('')
 
-  const load = () => api.get('/socios/').then(r => setSocios(r.data)).catch(() => {})
+  // El listado sin busqueda viene acotado a tu sucursal desde el backend; con
+  // `buscar` el servidor recorre el gym entero para poder atender al socio de otro
+  // local que llega de visita. Por eso el filtrado de texto ya no se hace aqui.
+  const load = (q = search) => {
+    const params = q.trim() ? { buscar: q.trim() } : {}
+    return api.get('/socios/', { params }).then(r => setSocios(r.data)).catch(() => {})
+  }
+
+  // Debounce: sin el, cada tecla dispara una consulta que cruza sucursales.
   useEffect(() => {
-    load()
+    const t = setTimeout(() => load(search), 300)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search])
+
+  useEffect(() => {
     api.get('/socios/planes/').then(r => setPlanes(r.data)).catch(() => {})
     api.get('/gyms/sucursales/').then(r => setSucursales(r.data)).catch(() => {})
     api.get('/legal/documentos/vigentes/')
@@ -361,15 +376,28 @@ export default function Socios() {
     }
   }
 
+  const eliminarSocio = async () => {
+    if (!eliminando) return
+    setEliminandoLoading(true)
+    try {
+      await api.delete(`/socios/${eliminando.id}/`)
+      toast.success(`${eliminando.nombre} ${eliminando.apellido} dado de baja`)
+      setEliminando(null)
+      load()
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'No se pudo dar de baja al socio')
+    } finally {
+      setEliminandoLoading(false)
+    }
+  }
+
   const activos = socios.filter(s => s.activo).length
   const inactivos = socios.filter(s => !s.activo).length
 
+  // Solo el filtro de estado: el de texto lo aplica el servidor, que ademas es el
+  // unico que puede ver mas alla de tu sucursal.
   const filtered = socios
     .filter(s => filtro === 'activos' ? s.activo : filtro === 'inactivos' ? !s.activo : true)
-    .filter(s =>
-      `${s.nombre} ${s.apellido} ${s.email} ${s.numero_socio ?? ''}`
-        .toLowerCase().includes(search.toLowerCase())
-    )
 
   const inputCls = 'w-full rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none text-white'
 
@@ -398,7 +426,7 @@ export default function Socios() {
           </svg>
           <input
             type="text"
-            placeholder="Buscar por nombre..."
+            placeholder={sucursalId ? 'Buscar en todas las sucursales...' : 'Buscar por nombre, correo o numero...'}
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="bg-transparent text-sm w-full outline-none text-white placeholder:text-[#3d444d]"
@@ -545,6 +573,19 @@ export default function Socios() {
                             style={{ color: '#8b949e' }} className="hover:text-white transition-colors">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                          </button>
+                          {/* Baja logica: el socio desaparece del listado y su QR deja
+                              de abrir, pero pagos, accesos y consentimientos quedan.
+                              Icono de archivar y NO de bote: el bote de al lado es la
+                              cancelacion ARCO, que si es irreversible. */}
+                          <button onClick={() => setEliminando(s)}
+                            title="Dar de baja al socio (reversible)"
+                            style={{ color: '#8b949e' }} className="transition-colors"
+                            onMouseEnter={e => e.currentTarget.style.color = '#f97316'}
+                            onMouseLeave={e => e.currentTarget.style.color = '#8b949e'}>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
                             </svg>
                           </button>
                           <button onClick={() => { setCancelando(s); setCancelPass(''); setCancelTexto(''); setCancelError('') }}
@@ -824,6 +865,37 @@ export default function Socios() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Baja logica. Sin contrasena ni palabra escrita a proposito: es reversible,
+          y pedir lo mismo que la cancelacion ARCO acabaria ensenando a teclear la
+          confirmacion en automatico, justo antes de la accion que si borra datos. */}
+      {eliminando && (
+        <div className="fixed inset-0 flex items-center justify-center z-[70] p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.85)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-sm my-auto" style={CARD_STYLE}>
+            <h2 className="text-sm font-bold text-white">Dar de baja al socio</h2>
+            <p className="text-xs mt-2 leading-relaxed" style={{ color: '#8b949e' }}>
+              <span className="text-white font-semibold">{eliminando.nombre} {eliminando.apellido}</span>{' '}
+              dejara de aparecer en el listado y su codigo QR dejara de abrir la puerta.
+            </p>
+            <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#8b949e' }}>
+              No se borra nada: sus pagos, membresias, accesos y consentimientos se
+              conservan. Se puede reactivar despues.
+            </p>
+            <div className="flex gap-2 mt-5">
+              <button type="button" onClick={() => setEliminando(null)}
+                className="flex-1 py-2.5 rounded-lg text-xs font-bold"
+                style={{ backgroundColor: '#21262d', color: '#8b949e' }}>
+                Cancelar
+              </button>
+              <button type="button" onClick={eliminarSocio} disabled={eliminandoLoading}
+                className="flex-1 py-2.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                style={{ backgroundColor: '#f97316', color: '#0d1117' }}>
+                {eliminandoLoading ? 'Dando de baja...' : 'Dar de baja'}
+              </button>
+            </div>
           </div>
         </div>
       )}

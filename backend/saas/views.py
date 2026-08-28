@@ -51,7 +51,14 @@ class TenantViewSet(viewsets.ModelViewSet):
         return Gym.objects.annotate(
             num_sucursales=Count('sucursales', filter=Q(sucursales__activa=True), distinct=True),
             num_empleados=Count('usuarios', filter=Q(usuarios__is_active=True), distinct=True),
-            num_socios=Count('socios', filter=Q(socios__activo=True), distinct=True),
+            # `eliminado_en` ademas de `activo`: la baja logica ya apaga `activo`,
+            # pero depender de eso deja el conteo a merced de un PATCH que lo
+            # reactive sin restaurar al socio.
+            num_socios=Count(
+                'socios',
+                filter=Q(socios__activo=True, socios__eliminado_en__isnull=True),
+                distinct=True,
+            ),
         ).order_by('-creado_en')
 
     def create(self, request, *args, **kwargs):
@@ -175,7 +182,9 @@ class ResumenView(APIView):
     def get(self, request):
         gyms = Gym.objects.all()
         socios_vigentes = (
-            Membresia.objects.vigentes().values('socio_id').distinct().count()
+            Membresia.objects.vigentes()
+            .filter(socio__eliminado_en__isnull=True)
+            .values('socio_id').distinct().count()
         )
         return Response({
             'gyms_total': gyms.count(),
@@ -183,7 +192,7 @@ class ResumenView(APIView):
             'gyms_suspendidos': gyms.filter(activo=False).count(),
             'sucursales': Sucursal.objects.filter(activa=True).count(),
             'empleados': Usuario.objects.filter(is_active=True, gym__isnull=False).count(),
-            'socios': Socio.objects.filter(activo=True).count(),
+            'socios': Socio.objects.vivos().filter(activo=True).count(),
             # Socios que hoy pueden entrar. Es la medida de uso real del producto y
             # la que sostiene el argumento de subir de paquete.
             'socios_vigentes': socios_vigentes,

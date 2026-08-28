@@ -43,9 +43,12 @@ class TenantSerializer(serializers.ModelSerializer):
         """Socios que hoy pueden entrar. Es la medida real de uso del sistema:
         un gimnasio con 300 socios de los que 40 están al corriente no consume
         como uno de 300."""
+        # `socio__eliminado_en__isnull=True`: la membresia de un socio dado de baja
+        # puede seguir siendo "vigente" por fecha y estado, asi que sin esto un socio
+        # eliminado seguia contando como uso facturable del sistema.
         return (
             Membresia.objects.vigentes()
-            .filter(socio__gym_id=obj.id)
+            .filter(socio__gym_id=obj.id, socio__eliminado_en__isnull=True)
             .values('socio_id').distinct().count()
         )
 

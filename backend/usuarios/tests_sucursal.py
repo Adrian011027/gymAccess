@@ -70,15 +70,38 @@ class AlcanceLecturaTests(BaseDosSucursales):
         resp = self.client.get(f'/api/socios/membresias/{membresia.id}/')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_socios_NO_se_acotan_por_sucursal(self):
-        """El socio le paga al negocio: toda caja debe poder atenderlo."""
+    def test_listado_de_socios_se_acota_a_su_sucursal(self):
+        """Recepcion abre /socios y ve su local, no el padron entero del negocio."""
         self.socio_en(self.centro, 'AnaCentro')
         self.socio_en(self.norte, 'BetoNorte')
         self.authenticate(self.recep_norte)
         resp = self.client.get('/api/socios/')
         nombres = [s['nombre'] for s in resp.data]
-        self.assertIn('AnaCentro', nombres)
         self.assertIn('BetoNorte', nombres)
+        self.assertNotIn('AnaCentro', nombres)
+
+    def test_la_busqueda_si_cruza_sucursales(self):
+        """El socio le paga al negocio: si viene de visita hay que poder atenderlo.
+
+        Es la contraparte del test de arriba. Acotar tambien la busqueda dejaria al
+        visitante invisible en el mostrador, que es justo lo que el alcance estricto
+        rompe y por lo que el listado y la busqueda se separan.
+        """
+        self.socio_en(self.centro, 'AnaCentro')
+        self.socio_en(self.norte, 'BetoNorte')
+        self.authenticate(self.recep_norte)
+        resp = self.client.get('/api/socios/?buscar=AnaCentro')
+        nombres = [s['nombre'] for s in resp.data]
+        self.assertIn('AnaCentro', nombres)
+
+    def test_recepcion_no_se_sale_de_su_alcance_con_query_param(self):
+        """`?sucursal=` es del dueno; a recepcion se le ignora."""
+        self.socio_en(self.centro, 'AnaCentro')
+        self.socio_en(self.norte, 'BetoNorte')
+        self.authenticate(self.recep_norte)
+        resp = self.client.get(f'/api/socios/?sucursal={self.centro.id}')
+        nombres = [s['nombre'] for s in resp.data]
+        self.assertEqual(nombres, ['BetoNorte'])
 
     def test_socio_expone_de_que_sucursal_es(self):
         socio, _ = self.socio_en(self.centro, 'AnaCentro')

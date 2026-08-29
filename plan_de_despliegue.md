@@ -268,6 +268,34 @@ cat /etc/nginx/proxy_params
 Debe incluir `proxy_set_header X-Forwarded-Proto $scheme;` y
 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
 
+### Enlaces del QR que se mandan al socio
+
+El mensaje de WhatsApp lleva un enlace a `/api/accesos/qr/<token>/`, la página donde el
+socio ve su código. Dos cosas que revisar aquí, porque fallan en silencio:
+
+**1. `proxy_params` tiene que pasar también el `Host`.** Django arma ese enlace con el
+host de la petición, así que si nginx manda `Host: 127.0.0.1:8001` el socio recibe un
+enlace a la dirección interna del servidor. Comprobar que `proxy_params` incluye
+`proxy_set_header Host $http_host;`. Si no lo lleva —o si prefieres no depender de
+ello— se fija el dominio a mano en `.env`:
+
+```
+QR_BASE_URL=https://gym.tudominio.com
+```
+
+**2. Ese enlace es público y tiene que seguir siéndolo.** El socio no tiene cuenta en el
+sistema: no hay sesión con la que autenticar esa petición. Cae bajo `location /api/`, que
+ya está limitado a 10 r/s, y el propio endpoint lleva su throttle de 20/min. Lo que lo
+hace seguro no es el secreto de la URL sino los 96 bits de azar del token; no añadir ahí
+ninguna regla de nginx que exija cabeceras de sesión o el enlace dejará de abrir.
+
+Prueba después de recargar nginx, desde fuera del servidor:
+
+```bash
+curl -sI https://gym.tudominio.com/api/accesos/qr/<token-de-un-socio>.png | head -3
+# HTTP/2 200 ... content-type: image/png
+```
+
 ```bash
 sudo ln -s /etc/nginx/sites-available/gymaccess /etc/nginx/sites-enabled/
 sudo nginx -t                 # <-- si esto falla, NO recargar

@@ -52,6 +52,12 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
+      # Cubre la lógica que decide a qué número se manda el QR de un socio. No da
+      # error en pantalla cuando se rompe: abre el chat equivocado y nadie se entera.
+      - name: Tests
+        working-directory: frontend
+        run: npm test
+
       - name: Build
         working-directory: frontend
         run: npm run build

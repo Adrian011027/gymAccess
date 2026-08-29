@@ -162,12 +162,18 @@ export default function CheckIn() {
               const el = document.activeElement
               if (!el || el === document.body) inputRef.current?.focus()
             }, 100)}
-            placeholder="CÓDIGO DE ACCESO"
+            placeholder="ESCANEA EL QR O TECLEA EL N° DE SOCIO"
             autoComplete="off"
             className="w-full text-center text-lg sm:text-2xl font-black tracking-widest rounded-xl px-4 py-4 sm:py-5 outline-none text-white placeholder:text-[#3d444d]"
             style={{ backgroundColor: '#0d1117', border: '2px solid #21262d', caretColor: '#22c55e' }}
             onFocus={e => (e.target.style.borderColor = '#22c55e')}
           />
+          {/* El campo aceptaba solo el token del QR y no había nada en pantalla que
+              dijera que el número corto también sirve, así que recepción seguía
+              buscando por nombre al socio que llegaba sin teléfono. */}
+          <p className="text-[10px] text-center -mt-1" style={{ color: '#3d444d' }}>
+            Acepta el código del QR o el número de socio (1001, 1002…)
+          </p>
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             {verTodasLasSucursales ? (
               <select
@@ -308,13 +314,13 @@ export default function CheckIn() {
             porque desde el kiosco no había forma de identificarlo. */}
         <div className="rounded-2xl p-4 sm:p-5" style={{ backgroundColor: '#161b22', border: '1px solid #21262d' }}>
           <p className="text-[10px] font-bold tracking-widest mb-2" style={{ color: '#8b949e' }}>
-            ¿NO TRAE SU CÓDIGO? BÚSCALO POR NOMBRE
+            ¿NO TRAE SU CÓDIGO? BÚSCALO POR NOMBRE O NÚMERO
           </p>
           <form onSubmit={buscarPorNombre} className="flex gap-2">
             <input
               value={busqueda}
               onChange={e => setBusqueda(e.target.value)}
-              placeholder="Nombre o apellido"
+              placeholder="Nombre, apellido o n° de socio"
               autoComplete="off"
               className="flex-1 text-sm rounded-lg px-3 py-2.5 outline-none text-white placeholder:text-[#3d444d]"
               style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}
@@ -341,7 +347,14 @@ export default function CheckIn() {
                 <div key={c.id} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2.5"
                   style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold text-white truncate">{c.nombre}</p>
+                    <p className="text-xs font-semibold text-white truncate">
+                      {c.nombre}
+                      {c.numero_socio != null && (
+                        <span className="ml-2 font-mono font-normal" style={{ color: '#22c55e' }}>
+                          #{c.numero_socio}
+                        </span>
+                      )}
+                    </p>
                     <p className="text-[10px] truncate" style={{ color: '#8b949e' }}>
                       {c.sucursal || 'Sin sucursal asignada'}
                       {c.al_corriente
@@ -349,11 +362,12 @@ export default function CheckIn() {
                         : ' · sin membresía vigente'}
                     </p>
                   </div>
-                  {/* Sin código no hay con qué registrar la entrada; se dice en vez de
-                      ofrecer un botón que va a fallar. */}
-                  {c.token ? (
+                  {/* Antes, un socio sin QR asignado no se podía registrar desde aquí
+                      y quedaba en "Sin código QR" sin salida. Su número de socio lo
+                      identifica igual, así que el botón ya no depende del QR. */}
+                  {(c.token || c.numero_socio != null) ? (
                     <button
-                      onClick={() => procesar(c.token)}
+                      onClick={() => procesar(c.token || String(c.numero_socio))}
                       disabled={loading}
                       className="px-3 py-2 rounded-lg text-[10px] font-bold shrink-0 disabled:opacity-40"
                       style={{
@@ -365,7 +379,7 @@ export default function CheckIn() {
                     </button>
                   ) : (
                     <span className="text-[10px] shrink-0" style={{ color: '#f97316' }}>
-                      Sin código QR
+                      Sin código ni número
                     </span>
                   )}
                 </div>

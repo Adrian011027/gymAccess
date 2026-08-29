@@ -3,6 +3,9 @@ import { QRCodeSVG } from 'qrcode.react'
 import api from '../api/axios'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
+import {
+  destinatarioWhatsApp, mensajeQR, urlPublicaDelQR, urlWhatsApp,
+} from '../lib/whatsappQR'
 import Markdown from '../components/Markdown'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
@@ -155,7 +158,10 @@ export default function Socios() {
     setQrLoading(true)
     try {
       const { data } = await api.post('/accesos/asignar-qr/', { socio_id: qrModal.id })
-      setQrModal(m => ({ ...m, codigo_acceso: data.token }))
+      setQrModal(m => ({
+        ...m, codigo_acceso: data.token,
+        qr_imagen_url: data.imagen_url, qr_pagina_url: data.pagina_url,
+      }))
       toast.success('Código QR asignado')
       load()
     } catch (err) {
@@ -164,6 +170,9 @@ export default function Socios() {
       setQrLoading(false)
     }
   }
+
+  const destinoWhatsApp = destinatarioWhatsApp(qrModal)
+  const enlaceQR = urlPublicaDelQR(qrModal?.qr_pagina_url)
 
   const imprimirQR = () => {
     // Se imprime el nodo del QR tal cual: abrir una ventana con el SVG serializado
@@ -180,6 +189,100 @@ export default function Socios() {
     win.document.close()
     win.focus()
     win.print()
+  }
+
+  /** El QR solo, como PNG cuadrado y con su margen blanco.
+   *
+   * Nada de nombre ni texto encima: lo que se manda por chat es el código, y el
+   * mensaje que va al lado ya dice de quién es y cuál es. Una imagen con rótulos se
+   * ve como un volante y se reenvía peor que un QR a secas.
+   *
+   * PNG y no JPG a propósito: el JPG comprime con pérdida y los artefactos alrededor
+   * de los módulos negros son justo lo que hace que un escáner dude.
+   */
+  const qrComoPNG = () => new Promise((resolve, reject) => {
+    const svg = document.getElementById('qr-socio')
+    if (!svg) return reject(new Error('El QR no está en pantalla'))
+
+    // El viewBox del SVG viene en módulos (los cuadritos del código), no en píxeles.
+    // Leerlo de ahí permite dejar el margen que pide la norma —4 módulos— en vez de un
+    // número redondo de píxeles que en un código denso se queda corto y deja de leerse
+    // pegado al borde de la burbuja del chat.
+    const modulos = Number(svg.getAttribute('viewBox')?.split(' ')[2]) || 25
+    const escala = Math.max(4, Math.round(720 / (modulos + 8)))
+    const dibujo = modulos * escala
+    const margen = 4 * escala
+    const lado = dibujo + 2 * margen
+
+    // Se rasteriza a tamaño final, no al de pantalla: el SVG del modal mide 168 px y
+    // dejar que el navegador lo estire al vuelo da módulos con el borde lavado, que es
+    // como un QR nítido en pantalla llega borroso al chat.
+    const clon = svg.cloneNode(true)
+    clon.setAttribute('width', String(dibujo))
+    clon.setAttribute('height', String(dibujo))
+    const url = URL.createObjectURL(new Blob(
+      [new XMLSerializer().serializeToString(clon)],
+      { type: 'image/svg+xml;charset=utf-8' },
+    ))
+
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const canvas = document.createElement('canvas')
+      canvas.width = lado
+      canvas.height = lado
+      const ctx = canvas.getContext('2d')
+      // El QR necesita fondo blanco propio: un PNG transparente sobre el tema oscuro
+      // de WhatsApp queda negro sobre negro y no lo lee nadie.
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, lado, lado)
+      ctx.drawImage(img, margen, margen, dibujo, dibujo)
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error('No se pudo generar el PNG')), 'image/png')
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('No se pudo leer el QR')) }
+    img.src = url
+  })
+
+  const descargarQR = async socio => {
+    const png = await qrComoPNG()
+    const url = URL.createObjectURL(png)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `qr-${socio.nombre}-${socio.apellido}.png`.replace(/\s+/g, '-').toLowerCase()
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  /** Abre el chat del socio con el mensaje escrito y el QR ya en el portapapeles.
+   *
+   * WhatsApp NO deja adjuntar una imagen desde la URL: `wa.me` y `web.whatsapp.com/send`
+   * solo admiten texto prellenado, y mandar el archivo por su cuenta exige la API de
+   * negocios de Meta. Lo más cerca que se llega desde el navegador es dejar el PNG
+   * copiado para que recepción solo pegue con Ctrl+V; si el navegador no permite
+   * copiar imágenes, se descarga y se adjunta a mano.
+   */
+  const enviarQRPorWhatsApp = async () => {
+    const destino = destinatarioWhatsApp(qrModal)
+    if (!destino) return
+    let copiado = false
+    try {
+      // Se le pasa la promesa, no el PNG ya resuelto: `clipboard.write` tiene que
+      // salir dentro del clic, y esperar a que el lienzo termine antes de llamarla
+      // deja el permiso fuera del gesto en Safari.
+      await navigator.clipboard.write([
+        new ClipboardItem({ 'image/png': qrComoPNG() }),
+      ])
+      copiado = true
+    } catch {
+      // Firefox viejo, http sin candado o permiso denegado: queda el archivo.
+      try { await descargarQR(qrModal) } catch { /* sin imagen, pero el chat abre igual */ }
+    }
+    // El chat se abre DESPUÉS de copiar: `clipboard.write` exige que esta pestaña
+    // tenga el foco, y abrir WhatsApp antes se lo quita y la copia falla.
+    window.open(urlWhatsApp(destino.telefono, mensajeQR(qrModal, destino)), '_blank', 'noopener')
+    toast.success(copiado
+      ? 'QR copiado: pégalo en el chat con Ctrl + V'
+      : 'QR descargado: adjúntalo en el chat')
   }
 
   const exportarDatos = async socio => {
@@ -1062,21 +1165,74 @@ export default function Socios() {
                 >
                   {qrModal.codigo_acceso}
                 </button>
-                <div className="flex gap-3">
+                <div className="space-y-2">
+                  {/* Mandar el QR es lo que más se hace con él: el socio lo trae en el
+                      teléfono y no hay que imprimir nada. Por eso va arriba y solo. */}
                   <button
-                    onClick={() => setQrModal(null)}
-                    className="flex-1 py-2.5 rounded-lg text-xs font-semibold"
-                    style={{ border: '1px solid #21262d', color: '#8b949e', backgroundColor: 'transparent' }}
+                    onClick={enviarQRPorWhatsApp}
+                    disabled={!destinoWhatsApp}
+                    title={destinoWhatsApp
+                      ? `Abrir chat con +${destinoWhatsApp.telefono}`
+                      : 'Sin teléfono registrado no hay a dónde enviarlo'}
+                    className="w-full py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ backgroundColor: '#25d366', color: '#0d1117' }}
                   >
-                    Cerrar
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51l-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                    </svg>
+                    Enviar por WhatsApp
                   </button>
-                  <button
-                    onClick={imprimirQR}
-                    className="flex-1 py-2.5 rounded-lg text-xs font-bold"
-                    style={{ backgroundColor: '#22c55e', color: '#0d1117' }}
-                  >
-                    Imprimir
-                  </button>
+                  {/* Se dice de antemano que hay que pegar: WhatsApp no deja adjuntar
+                      la imagen desde el enlace, y un chat que abre "vacío" parece un
+                      botón roto si nadie avisó que el QR ya está en el portapapeles. */}
+                  <p className="text-[10px] leading-relaxed text-left" style={{ color: '#8b949e' }}>
+                    {!destinoWhatsApp ? (
+                      'Este socio no tiene teléfono registrado. Agrégalo desde Editar para poder enviarle el QR.'
+                    ) : (
+                      <>
+                        Abre el chat de{' '}
+                        <span className="text-white font-semibold">
+                          {destinoWhatsApp.esTutor ? `${destinoWhatsApp.nombre} (tutor)` : destinoWhatsApp.nombre}
+                        </span>{' '}
+                        · +{destinoWhatsApp.telefono}.{' '}
+                        {/* Se distingue el caso porque el trabajo que le queda a
+                            recepción es distinto: con enlace, ninguno; sin él, pegar. */}
+                        {enlaceQR ? (
+                          <>
+                            El mensaje lleva un <span className="text-white font-semibold">enlace</span> que
+                            el socio pulsa para ver su QR, así que basta con enviarlo. La imagen también
+                            queda copiada por si prefieres pegarla en el chat.
+                          </>
+                        ) : (
+                          <>
+                            El QR queda copiado: pégalo con{' '}
+                            <span className="text-white font-semibold">Ctrl + V</span> y envía.
+                            <span className="block mt-1" style={{ color: '#3d444d' }}>
+                              El enlace a la imagen se manda solo cuando el sistema corre en un
+                              dominio público; en local no se incluye porque el teléfono del socio
+                              no puede abrirlo.
+                            </span>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </p>
+                  <div className="flex gap-3 pt-1">
+                    <button
+                      onClick={() => setQrModal(null)}
+                      className="flex-1 py-2.5 rounded-lg text-xs font-semibold"
+                      style={{ border: '1px solid #21262d', color: '#8b949e', backgroundColor: 'transparent' }}
+                    >
+                      Cerrar
+                    </button>
+                    <button
+                      onClick={imprimirQR}
+                      className="flex-1 py-2.5 rounded-lg text-xs font-bold"
+                      style={{ backgroundColor: '#22c55e', color: '#0d1117' }}
+                    >
+                      Imprimir
+                    </button>
+                  </div>
                 </div>
               </>
             ) : (
@@ -1108,6 +1264,7 @@ export default function Socios() {
     </div>
   )
 }
+
 
 function vencePronto(fecha) {
   if (!fecha) return false

@@ -271,6 +271,12 @@ class Gasto(models.Model):
         ('otro', 'Otro'),
     ]
 
+    METODO_CHOICES = [
+        ('efectivo', 'Efectivo'),
+        ('tarjeta', 'Tarjeta'),
+        ('transferencia', 'Transferencia'),
+    ]
+
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='gastos')
     # Nulo = gasto del negocio completo (contador, publicidad general). Con sucursal =
     # de ese local, que es lo que permite saber si una sucursal se paga sola.
@@ -281,6 +287,10 @@ class Gasto(models.Model):
     categoria = models.CharField(max_length=30, choices=CATEGORIA_CHOICES)
     descripcion = models.CharField(max_length=255)
     monto = models.DecimalField(max_digits=10, decimal_places=2)
+    # Con qué se pagó. Sin esto el corte de caja no cuadra: la renta pagada por
+    # transferencia no sale del cajón, y restarla del efectivo dejaría a recepción
+    # buscando un faltante que nunca existió.
+    metodo = models.CharField(max_length=20, choices=METODO_CHOICES, default='efectivo')
     fecha = models.DateField()
     registrado_por = models.ForeignKey(
         'usuarios.Usuario', on_delete=models.SET_NULL,

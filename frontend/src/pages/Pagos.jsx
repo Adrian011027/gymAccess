@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import api from '../api/axios'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
+import CorteDelDia from '../components/CorteDelDia'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 const INPUT_STYLE = { backgroundColor: '#0d1117', border: '1px solid #21262d', color: '#fff' }
@@ -16,7 +17,17 @@ const CATEGORIAS_GASTO = [
   ['renta', 'Renta'], ['nomina', 'Nómina'], ['equipo', 'Equipo'],
   ['servicios', 'Servicios'], ['mantenimiento', 'Mantenimiento'], ['marketing', 'Marketing'], ['otro', 'Otro'],
 ]
-const GASTO_EMPTY = { categoria: 'otro', descripcion: '', monto: '', fecha: new Date().toISOString().split('T')[0] }
+const GASTO_EMPTY = {
+  categoria: 'otro', descripcion: '', monto: '', metodo: 'efectivo', sucursal: '',
+  fecha: hoyLocal(),
+}
+
+// `toISOString()` da la fecha en UTC: pasadas las 6 de la tarde en México ya
+// adelanta un día y el gasto se guardaría con la fecha de mañana.
+function hoyLocal() {
+  const d = new Date()
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0]
+}
 
 // Etiqueta de urgencia de una membresía por cobrar. En la lista combinada el
 // "Vence: <fecha>" suelto no distingue al que lleva tres semanas atrasado del que
@@ -52,6 +63,9 @@ export default function Pagos() {
   const [gastoModal, setGastoModal] = useState(false)
   const [gastoForm, setGastoForm] = useState(GASTO_EMPTY)
 
+  const [sucursales, setSucursales] = useState([])
+  const [sucursalCorte, setSucursalCorte] = useState('')
+
   const load = () => api.get('/socios/membresias/').then(r => setMembresias(r.data)).catch(() => {})
   const loadPagos = () => api.get('/socios/pagos/').then(r => setPagos(r.data)).catch(() => {})
   const loadGastos = () => api.get('/socios/gastos/').then(r => setGastos(r.data)).catch(() => {})
@@ -60,6 +74,7 @@ export default function Pagos() {
     load()
     loadPagos()
     if (isAdmin) loadGastos()
+    api.get('/gyms/sucursales/').then(r => setSucursales(r.data)).catch(() => {})
   }, [isAdmin])
 
   const hoy = new Date().toISOString().split('T')[0]
@@ -109,7 +124,10 @@ export default function Pagos() {
   const guardarGasto = async e => {
     e.preventDefault()
     try {
-      await api.post('/socios/gastos/', gastoForm)
+      await api.post('/socios/gastos/', {
+        ...gastoForm,
+        sucursal: gastoForm.sucursal ? Number(gastoForm.sucursal) : null,
+      })
       toast.success('Gasto registrado')
       setGastoModal(false)
       setGastoForm(GASTO_EMPTY)
@@ -147,6 +165,7 @@ export default function Pagos() {
 
   const VISTAS = [
     ['pendientes', 'Por cobrar'],
+    ['corte', 'Corte del día'],
     ['registro', 'Registro de pagos'],
     ...(isAdmin ? [['gastos', 'Gastos']] : []),
   ]
@@ -257,6 +276,25 @@ export default function Pagos() {
         </>
       )}
 
+      {/* El corte junta cobros de membresía, ventas de tienda y gastos: el cajón
+          es uno solo aunque el sistema los capture en dos módulos distintos. */}
+      {vista === 'corte' && (
+        <>
+          {isAdmin && sucursales.length > 1 && (
+            <select
+              value={sucursalCorte}
+              onChange={e => setSucursalCorte(e.target.value)}
+              className="rounded-lg px-3 py-2 text-xs font-semibold outline-none text-white"
+              style={INPUT_STYLE}
+            >
+              <option value="">Todas las sucursales</option>
+              {sucursales.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+            </select>
+          )}
+          <CorteDelDia sucursal={sucursalCorte} sucursales={sucursales} />
+        </>
+      )}
+
       {vista === 'registro' && (
         <>
           <div className="flex gap-1 flex-wrap">
@@ -345,7 +383,7 @@ export default function Pagos() {
               <table className="w-full text-sm min-w-[560px]">
                 <thead style={{ borderBottom: '1px solid #21262d' }}>
                   <tr>
-                    {['CATEGORÍA', 'DESCRIPCIÓN', 'MONTO', 'FECHA'].map(h => (
+                    {['CATEGORÍA', 'DESCRIPCIÓN', 'MONTO', 'MÉTODO', 'SUCURSAL', 'FECHA'].map(h => (
                       <th key={h} className="px-4 py-3 text-left text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>{h}</th>
                     ))}
                   </tr>
@@ -356,11 +394,15 @@ export default function Pagos() {
                       <td className="px-4 py-3 text-xs capitalize" style={{ color: '#fff' }}>{g.categoria}</td>
                       <td className="px-4 py-3 text-xs" style={{ color: '#8b949e' }}>{g.descripcion}</td>
                       <td className="px-4 py-3 text-sm font-bold" style={{ color: '#ef4444' }}>${Number(g.monto).toLocaleString()}</td>
+                      <td className="px-4 py-3 text-xs capitalize" style={{ color: '#8b949e' }}>{METODO_LABEL[g.metodo] || g.metodo}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: g.sucursal ? '#8b949e' : '#3d444d' }}>
+                        {g.sucursal_nombre || 'Todo el negocio'}
+                      </td>
                       <td className="px-4 py-3 text-xs" style={{ color: '#8b949e' }}>{g.fecha}</td>
                     </tr>
                   ))}
                   {gastos.length === 0 && (
-                    <tr><td colSpan={4} className="px-4 py-10 text-center text-xs" style={{ color: '#3d444d' }}>Sin gastos registrados</td></tr>
+                    <tr><td colSpan={6} className="px-4 py-10 text-center text-xs" style={{ color: '#3d444d' }}>Sin gastos registrados</td></tr>
                   )}
                 </tbody>
               </table>
@@ -454,6 +496,26 @@ export default function Pagos() {
                   <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>FECHA</label>
                   <input required type="date" value={gastoForm.fecha} onChange={e => setGastoForm(f => ({ ...f, fecha: e.target.value }))}
                     className="w-full rounded-lg px-3 py-2 text-sm mt-1 outline-none text-white" style={INPUT_STYLE} />
+                </div>
+                {/* Con qué se pagó decide si el gasto baja el efectivo del cajón: la
+                    renta por transferencia no sale de la caja. */}
+                <div>
+                  <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>MÉTODO</label>
+                  <select value={gastoForm.metodo} onChange={e => setGastoForm(f => ({ ...f, metodo: e.target.value }))}
+                    className="w-full rounded-lg px-3 py-2 text-sm mt-1 outline-none text-white" style={INPUT_STYLE}>
+                    {Object.entries(METODO_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                </div>
+                {/* Y de qué caja salió: un gasto sin sucursal es del negocio y no entra
+                    al corte de ninguna, que es justo lo que hacía que los cortes de
+                    sucursal salieran siempre sin gastos. */}
+                <div>
+                  <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>SALIÓ DE</label>
+                  <select value={gastoForm.sucursal} onChange={e => setGastoForm(f => ({ ...f, sucursal: e.target.value }))}
+                    className="w-full rounded-lg px-3 py-2 text-sm mt-1 outline-none text-white" style={INPUT_STYLE}>
+                    <option value="">Todo el negocio (fuera del corte)</option>
+                    {sucursales.map(s => <option key={s.id} value={s.id}>Caja de {s.nombre}</option>)}
+                  </select>
                 </div>
               </div>
               <div className="flex gap-3 pt-2">

@@ -1,13 +1,21 @@
+import io
 from datetime import timedelta
 
+import qrcode
 from django.db import models
 from django.db.models import Count
 from django.db.models.functions import ExtractHour
+from django.http import HttpResponse
+from django.urls import reverse
+from django.utils.html import escape
 from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_control
 from rest_framework import viewsets, permissions, status
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from .enlaces import url_qr
 from .models import Acceso, MetodoAcceso, generar_token_qr
 from .serializers import AccesoSerializer, MetodoAccesoSerializer
 from gyms.models import Sucursal
@@ -98,7 +106,7 @@ class AsignarQRView(APIView):
 
         metodo = socio.metodos_acceso.filter(tipo='qr', activo=True).first()
         if metodo:
-            return Response(MetodoAccesoSerializer(metodo).data, status=status.HTTP_200_OK)
+            return Response(MetodoAccesoSerializer(metodo, context={'request': request}).data, status=status.HTTP_200_OK)
 
         # El token es único a nivel tabla: se reintenta ante una colisión del azar en
         # vez de devolver un 500 por IntegrityError.
@@ -107,7 +115,7 @@ class AsignarQRView(APIView):
             if not MetodoAcceso.objects.filter(token=token).exists():
                 metodo = MetodoAcceso.objects.create(socio=socio, tipo='qr', token=token)
                 return Response(
-                    MetodoAccesoSerializer(metodo).data, status=status.HTTP_201_CREATED,
+                    MetodoAccesoSerializer(metodo, context={'request': request}).data, status=status.HTTP_201_CREATED,
                 )
         return Response(
             {'error': 'No se pudo generar un código único, intenta de nuevo.'},
@@ -146,7 +154,7 @@ class SincronizarHuellaView(APIView):
             socio=socio, tipo='huella',
             defaults={'token': template, 'activo': True},
         )
-        return Response(MetodoAccesoSerializer(metodo).data, status=status.HTTP_200_OK)
+        return Response(MetodoAccesoSerializer(metodo, context={'request': request}).data, status=status.HTTP_200_OK)
 
 
 class AccesoViewSet(SucursalScopedMixin, viewsets.ReadOnlyModelViewSet):
@@ -187,12 +195,18 @@ class BuscarSocioView(APIView):
             gym_id=request.user.gym_id, activo=True,
         ).select_related('sucursal').prefetch_related('metodos_acceso')
 
-        # Se busca sobre "nombre apellido" completo para que "juan perez" encuentre a
-        # Juan Pérez; palabra por palabra, porque nadie escribe el orden exacto.
-        for palabra in termino.split():
-            qs = qs.filter(
-                models.Q(nombre__icontains=palabra) | models.Q(apellido__icontains=palabra)
-            )
+        # Un código corto no es un nombre: "1001" no aparece en ningún apellido, así
+        # que la búsqueda por palabras lo devolvía vacío y recepción concluía que el
+        # socio no existía.
+        if termino.isdigit() and len(termino) <= CheckInView.MAX_DIGITOS_NUMERO:
+            qs = qs.filter(numero_socio=int(termino))
+        else:
+            # Se busca sobre "nombre apellido" completo para que "juan perez" encuentre
+            # a Juan Pérez; palabra por palabra, porque nadie escribe el orden exacto.
+            for palabra in termino.split():
+                qs = qs.filter(
+                    models.Q(nombre__icontains=palabra) | models.Q(apellido__icontains=palabra)
+                )
 
         resultados = []
         for socio in qs.order_by('nombre', 'apellido')[:15]:
@@ -203,6 +217,7 @@ class BuscarSocioView(APIView):
             resultados.append({
                 'id': socio.id,
                 'nombre': f'{socio.nombre} {socio.apellido}',
+                'numero_socio': socio.numero_socio,
                 'token': metodo.token if metodo else None,
                 'sucursal': socio.sucursal.nombre if socio.sucursal_id else None,
                 'sucursal_id': socio.sucursal_id,
@@ -220,16 +235,20 @@ class CheckInView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'checkin'
 
+    # Tope del código corto. `numero_socio` es un PositiveIntegerField y un entero de
+    # 30 cifras revienta la consulta en Postgres antes de llegar a comparar nada.
+    MAX_DIGITOS_NUMERO = 9
+
     def post(self, request):
-        token = request.data.get('token')
+        codigo = str(request.data.get('token') or '').strip()
         sucursal_id = request.data.get('sucursal_id')
 
-        try:
-            metodo = MetodoAcceso.objects.select_related('socio').get(
-                token=token, activo=True, socio__gym_id=request.user.gym_id,
+        identificado = self.identificar(codigo, request.user.gym_id)
+        if identificado is None:
+            return Response(
+                {'error': 'Código no reconocido'}, status=status.HTTP_404_NOT_FOUND,
             )
-        except MetodoAcceso.DoesNotExist:
-            return Response({'error': 'Token inválido'}, status=status.HTTP_404_NOT_FOUND)
+        socio, metodo_usado = identificado
 
         # La sucursal viene del cliente: hay que comprobar que exista y que sea de este
         # gym antes de registrar nada. Sin esta validación el acceso se guardaba contra
@@ -255,8 +274,6 @@ class CheckInView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        socio = metodo.socio
-
         # Un socio dado de baja no entra, tenga la membresía que tenga.
         #
         # Esta comprobación no existía: el check-in miraba la vigencia de la
@@ -274,7 +291,7 @@ class CheckInView(APIView):
             Acceso.objects.create(
                 socio=socio,
                 sucursal=sucursal,
-                metodo_usado=metodo.tipo,
+                metodo_usado=metodo_usado,
                 resultado='denegado',
                 motivo_denegado='suspendido',
             )
@@ -292,7 +309,7 @@ class CheckInView(APIView):
             Acceso.objects.create(
                 socio=socio,
                 sucursal=sucursal,
-                metodo_usado=metodo.tipo,
+                metodo_usado=metodo_usado,
                 resultado='denegado',
                 motivo_denegado=motivo,
             )
@@ -322,7 +339,7 @@ class CheckInView(APIView):
                 socio=socio,
                 sucursal=sucursal,
                 membresia=membresia,
-                metodo_usado=metodo.tipo,
+                metodo_usado=metodo_usado,
                 resultado='denegado',
                 motivo_denegado='ya_registrado',
             )
@@ -362,7 +379,7 @@ class CheckInView(APIView):
                         socio=socio,
                         sucursal=sucursal,
                         membresia=membresia,
-                        metodo_usado=metodo.tipo,
+                        metodo_usado=metodo_usado,
                         resultado='denegado',
                         motivo_denegado='otra_sucursal',
                     )
@@ -379,7 +396,7 @@ class CheckInView(APIView):
             socio=socio,
             sucursal=sucursal,
             membresia=membresia,
-            metodo_usado=metodo.tipo,
+            metodo_usado=metodo_usado,
             resultado='permitido',
             autorizado_por=autorizador,
         )
@@ -394,6 +411,43 @@ class CheckInView(APIView):
             'sucursal_socio': socio.sucursal.nombre if socio.sucursal_id else None,
             'autorizado_por': autorizador.nombre if autorizador else None,
         })
+
+    def identificar(self, codigo, gym_id):
+        """Resuelve lo que llegó por el lector a (socio, cómo se identificó).
+
+        Acepta dos cosas por el mismo campo: el token del QR y el número de socio
+        corto (1001, 1002…). El corto existe para el que llega sin teléfono y sin
+        credencial, que hasta ahora dejaba a recepción sin forma de registrarle la
+        entrada desde el kiosco.
+
+        Que el consecutivo abra la puerta no contradice el motivo por el que el token
+        del QR lleva parte aleatoria: ese lo trae el socio y viaja por WhatsApp, así
+        que tiene que ser inadivinable. El corto solo lo puede teclear personal ya
+        autenticado en el mostrador, y la respuesta devuelve el nombre, de modo que un
+        1002 por un 1001 se ve en la pantalla antes de que nadie cruce la puerta.
+
+        Devuelve None si no corresponde a nadie de este gym.
+        """
+        if not codigo:
+            return None
+
+        metodo = MetodoAcceso.objects.select_related('socio').filter(
+            token=codigo, activo=True, socio__gym_id=gym_id,
+        ).first()
+        if metodo:
+            return metodo.socio, metodo.tipo
+
+        if codigo.isdigit() and len(codigo) <= self.MAX_DIGITOS_NUMERO:
+            socio = Socio.objects.vivos().filter(
+                gym_id=gym_id, numero_socio=int(codigo),
+            ).first()
+            if socio:
+                # 'manual' y no 'qr': la entrada se tecleó. Marcarla como escaneo
+                # falsearía la única señal que dice cuántos socios llegan de verdad
+                # con su código y cuántos hay que buscar a mano en el mostrador.
+                return socio, 'manual'
+
+        return None
 
 
 class StatsView(SucursalScopedMixin, APIView):
@@ -459,3 +513,124 @@ class StatsView(SucursalScopedMixin, APIView):
             'accesos_hoy': accesos_hoy,
             'accesos_mes': accesos_mes,
         })
+
+
+class QRImagenView(APIView):
+    """El QR de un socio como PNG, en una URL que se puede abrir sin sesión.
+
+    Existe porque un enlace de WhatsApp (`wa.me`, `web.whatsapp.com/send`) solo acepta
+    teléfono y texto: no hay forma de adjuntar una imagen desde la URL. Con esto el
+    mensaje lleva un enlace que WhatsApp previsualiza, y el socio abre o guarda su
+    código de una pulsación, sin que recepción tenga que pegar nada.
+
+    **Es pública a propósito**, y eso merece explicación: el socio no tiene cuenta en
+    el sistema, así que no hay sesión con la que autenticar la petición. Lo que la hace
+    aceptable es que la URL lleva el token, y el token es el secreto: quien la tiene ya
+    tiene la credencial, así que el enlace no expone nada que la imagen no expusiera.
+    Los 96 bits de `secrets.token_urlsafe(12)` son los que impiden llegar aquí
+    probando; el throttle está para que tampoco se pueda intentar en volumen.
+
+    No se guarda ningún PNG en disco: se dibuja al vuelo. Un directorio de imágenes por
+    socio se queda desincronizado en cuanto se reasigna un QR —el archivo viejo sigue
+    ahí, y sigue abriendo la puerta— y obliga a respaldar y a montar un volumen para
+    algo que se regenera en milisegundos.
+    """
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'qr_publico'
+
+    @method_decorator(cache_control(max_age=3600, private=True))
+    def get(self, request, token):
+        metodo = MetodoAcceso.objects.select_related('socio').filter(
+            token=token, tipo='qr', activo=True,
+        ).first()
+        # Un QR revocado, o de un socio dado de baja o borrado, deja de servirse: si
+        # no, el enlace sigue entregando una credencial que ya no vale y el socio se
+        # presenta en la puerta con ella.
+        if (
+            metodo is None
+            or metodo.socio.eliminado_en is not None
+            or not metodo.socio.activo
+        ):
+            return HttpResponse(status=404)
+
+        # box_size 20 deja el código sobre los 550 px. WhatsApp recomprime lo que pasa
+        # por el chat, y un PNG de 350 px llega con los módulos lavados justo cuando el
+        # socio lo enseña en la puerta desde la pantalla del teléfono.
+        imagen = qrcode.make(token, box_size=20, border=4)
+        buffer = io.BytesIO()
+        imagen.save(buffer, format='PNG')
+        # Sin nombre ni datos del socio en la respuesta: quien abra el enlace ve un
+        # código, no a quién pertenece.
+        return HttpResponse(buffer.getvalue(), content_type='image/png')
+
+
+class QRPaginaView(APIView):
+    """La página que abre el socio desde el chat: su código QR, a pantalla completa.
+
+    El enlace del mensaje apunta aquí y no al `.png` directo por dos razones. Una, que
+    varios navegadores móviles descargan una URL de imagen en vez de mostrarla, y el
+    socio acaba con un archivo en la carpeta de descargas en vez de un código que
+    enseñar en la puerta. Y dos, que WhatsApp previsualiza los enlaces leyendo las
+    etiquetas Open Graph: con `og:image` apuntando al PNG, la miniatura del QR se ve
+    en el chat sin que nadie abra nada.
+
+    Deliberadamente NO lleva el nombre del socio ni ningún dato suyo: el enlace se
+    reenvía con un toque, y lo único que debe viajar es el código. El nombre del
+    gimnasio sí, porque orienta al socio y no es un dato personal de él.
+    """
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'qr_publico'
+
+    def get(self, request, token):
+        metodo = MetodoAcceso.objects.select_related('socio__gym').filter(
+            token=token, tipo='qr', activo=True,
+        ).first()
+        if (
+            metodo is None
+            or metodo.socio.eliminado_en is not None
+            or not metodo.socio.activo
+        ):
+            return HttpResponse(
+                '<!doctype html><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                '<body style="font-family:system-ui;text-align:center;padding:48px 24px">'
+                '<h1 style="font-size:18px">Este código ya no está disponible</h1>'
+                '<p style="color:#666;font-size:14px">Pídele uno nuevo a recepción.</p>',
+                status=404, content_type='text/html; charset=utf-8',
+            )
+
+        gym = escape(metodo.socio.gym.nombre if metodo.socio.gym_id else 'tu gimnasio')
+        png = url_qr(request, metodo.token, 'qr-imagen')
+        return HttpResponse(f"""<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tu código de acceso</title>
+<meta property="og:title" content="Tu código de acceso · {gym}">
+<meta property="og:description" content="Muéstralo en la entrada para registrar tu acceso.">
+<meta property="og:image" content="{png}">
+<meta property="og:type" content="website">
+</head>
+<body style="margin:0;background:#0d1117;color:#fff;font-family:system-ui,-apple-system,sans-serif;
+             min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">
+  <div style="text-align:center;max-width:420px;width:100%">
+    <p style="font-size:12px;letter-spacing:.18em;color:#8b949e;margin:0 0 4px">{gym}</p>
+    <h1 style="font-size:18px;font-weight:800;margin:0 0 20px">Tu código de acceso</h1>
+    <!-- Fondo blanco propio: el QR sobre el fondo oscuro no lo lee ningún escáner. -->
+    <div style="background:#fff;padding:16px;border-radius:16px;display:inline-block;width:100%;
+                box-sizing:border-box">
+      <img src="{png}" alt="Código QR de acceso"
+           style="width:100%;height:auto;display:block;image-rendering:pixelated">
+    </div>
+    <p style="font-size:13px;color:#8b949e;line-height:1.5;margin:20px 0 0">
+      Muéstralo en la entrada para registrar tu acceso.<br>
+      Mantén pulsada la imagen para guardarla en tu teléfono.
+    </p>
+  </div>
+</body></html>""", content_type='text/html; charset=utf-8')

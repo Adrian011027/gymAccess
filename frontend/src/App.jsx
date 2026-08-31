@@ -6,6 +6,7 @@ import Login from './pages/Login'
 import SaasLogin from './pages/SaasLogin'
 import CheckIn from './pages/CheckIn'
 import Dashboard from './pages/Dashboard'
+import Afluencia from './pages/Afluencia'
 import Socios from './pages/Socios'
 import Clases from './pages/Clases'
 import Equipamiento from './pages/Equipamiento'
@@ -62,6 +63,9 @@ export default function App() {
             <Route path="/pagos"        element={<Pagos />} />
             <Route path="/pos"          element={<POS />} />
             <Route path="/notificaciones" element={<Notificaciones />} />
+            {/* Fuera de AdminRoutes a proposito: la afluencia la necesita quien esta
+                en el piso. El Dashboard sigue cerrado porque ahi van los ingresos. */}
+            <Route path="/afluencia"    element={<Afluencia />} />
             <Route element={<AdminRoutes />}>
               <Route path="/dashboard"    element={<Dashboard />} />
               <Route path="/equipamiento" element={<Equipamiento />} />

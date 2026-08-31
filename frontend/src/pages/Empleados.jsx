@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import api from '../api/axios'
+import SucursalSelector from '../components/SucursalSelector'
 import { useAuth } from '../context/AuthContext'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
@@ -42,14 +43,17 @@ export default function Empleados() {
   const [filtroRol, setFiltroRol] = useState('todos')
 
   const cargarSucursales = () => api.get('/gyms/sucursales/').then(r => setSucursales(r.data)).catch(() => {})
-  const cargarUsuarios = () => api.get('/usuarios/').then(r => setUsuarios(r.data)).catch(() => {})
+  const cargarUsuarios = () => api.get(`/usuarios/${q}`).then(r => setUsuarios(r.data)).catch(() => {})
   const cargarGym = () => api.get('/gyms/').then(r => setGymReal(r.data[0] || null)).catch(() => {})
 
+  const [q, setQ] = useState('')
   useEffect(() => {
     cargarSucursales()
     cargarUsuarios()
     cargarGym()
-  }, [])
+    // `q` recarga la plantilla: el resto no cambia por sucursal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q])
 
   const errorDe = err => {
     const d = err.response?.data
@@ -149,10 +153,17 @@ export default function Empleados() {
 
   return (
     <div className="space-y-5">
-      <h2 className="text-xl font-black text-white uppercase tracking-wide">EMPLEADOS</h2>
-      <p className="text-xs -mt-3" style={{ color: '#8b949e' }}>
-        Sucursales asignadas y horario de referencia de cada empleado
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-black text-white uppercase tracking-wide">EMPLEADOS</h2>
+          <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>
+            Sucursales asignadas y horario de referencia de cada empleado
+          </p>
+        </div>
+        {/* Un empleado se lista por las sucursales donde PUEDE trabajar, no por la
+            activa de su sesion: quien rota entre locales tiene que salir en ambos. */}
+        <SucursalSelector onChange={setQ} />
+      </div>
 
       <div className="rounded-xl p-6" style={CARD_STYLE}>
         <div className="flex items-center justify-between mb-5 flex-wrap gap-3">

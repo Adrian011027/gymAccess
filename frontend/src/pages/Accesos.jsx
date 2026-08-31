@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react'
 import api from '../api/axios'
+import SucursalSelector from '../components/SucursalSelector'
 
 export default function Accesos() {
   const [accesos, setAccesos] = useState([])
-  useEffect(() => { api.get('/accesos/').then(r => setAccesos(r.data)) }, [])
+  const [q, setQ] = useState('')
+  useEffect(() => { api.get(`/accesos/${q}`).then(r => setAccesos(r.data)).catch(() => {}) }, [q])
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-gray-800">Accesos</h1>
-        <p className="text-xs text-gray-400 mt-0.5">Historial de entradas</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">Accesos</h1>
+          <p className="text-xs text-gray-400 mt-0.5">Historial de entradas</p>
+        </div>
+        <SucursalSelector onChange={setQ} />
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">

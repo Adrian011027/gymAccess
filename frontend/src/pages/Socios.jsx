@@ -3,9 +3,11 @@ import { QRCodeSVG } from 'qrcode.react'
 import api from '../api/axios'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
+import SucursalSelector from '../components/SucursalSelector'
 import {
   destinatarioWhatsApp, mensajeQR, urlPublicaDelQR, urlWhatsApp,
 } from '../lib/whatsappQR'
+import { enDias, fechaLocal } from '../lib/fechas'
 import Markdown from '../components/Markdown'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
@@ -19,19 +21,6 @@ const EMPTY = {
   fecha_nacimiento: '', plan_id: '', sucursal: '',
   tutor_nombre: '', tutor_parentesco: '', tutor_telefono: '',
   acepta_aviso: false,
-}
-
-// Fecha LOCAL en formato YYYY-MM-DD. `toISOString()` convierte a UTC: en México
-// (UTC-6) a partir de las 18:00 devuelve el día siguiente, y una membresía que
-// empieza mañana no está vigente hoy —`Membresia.vigentes()` exige
-// `fecha_inicio <= hoy`—, así que el check-in rechazaba al socio que acababa de pagar.
-const fechaLocal = (d = new Date()) =>
-  new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
-
-const enDias = dias => {
-  const d = new Date()
-  d.setDate(d.getDate() + dias)
-  return fechaLocal(d)
 }
 
 // Un menor no puede consentir el tratamiento de sus datos: lo hace quien ejerce la
@@ -113,6 +102,8 @@ export default function Socios() {
   // Derechos ARCO: el socio puede pedir ver sus datos y pedir que se borren.
   const [eliminando, setEliminando] = useState(null)
   const [eliminandoLoading, setEliminandoLoading] = useState(false)
+  const [bajaTexto, setBajaTexto] = useState('')
+  const [sucursalFiltro, setSucursalFiltro] = useState('')
   const [cancelando, setCancelando] = useState(null)
   const [cancelPass, setCancelPass] = useState('')
   const [cancelTexto, setCancelTexto] = useState('')
@@ -129,8 +120,11 @@ export default function Socios() {
   // El listado sin busqueda viene acotado a tu sucursal desde el backend; con
   // `buscar` el servidor recorre el gym entero para poder atender al socio de otro
   // local que llega de visita. Por eso el filtrado de texto ya no se hace aqui.
-  const load = (q = search) => {
-    const params = q.trim() ? { buscar: q.trim() } : {}
+  const load = (texto = search) => {
+    const params = texto.trim() ? { buscar: texto.trim() } : {}
+    // El id sale del sufijo que arma SucursalSelector ('' o '?sucursal=N').
+    const suc = sucursalFiltro.replace('?sucursal=', '')
+    if (suc) params.sucursal = suc
     return api.get('/socios/', { params }).then(r => setSocios(r.data)).catch(() => {})
   }
 
@@ -139,7 +133,7 @@ export default function Socios() {
     const t = setTimeout(() => load(search), 300)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search])
+  }, [search, sucursalFiltro])
 
   useEffect(() => {
     api.get('/socios/planes/').then(r => setPlanes(r.data)).catch(() => {})
@@ -481,11 +475,15 @@ export default function Socios() {
 
   const eliminarSocio = async () => {
     if (!eliminando) return
+    // Se revalida aquí y no solo con el `disabled` del botón: el estado puede quedar
+    // desfasado si se cambia de socio con el modal abierto.
+    if (bajaTexto.trim().toLowerCase() !== 'eliminar') return
     setEliminandoLoading(true)
     try {
       await api.delete(`/socios/${eliminando.id}/`)
       toast.success(`${eliminando.nombre} ${eliminando.apellido} dado de baja`)
       setEliminando(null)
+      setBajaTexto('')
       load()
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'No se pudo dar de baja al socio')
@@ -494,13 +492,12 @@ export default function Socios() {
     }
   }
 
-  const activos = socios.filter(s => s.activo).length
-  const inactivos = socios.filter(s => !s.activo).length
+  const cuenta = clave => socios.filter(s => estadoSocio(s).clave === clave).length
 
   // Solo el filtro de estado: el de texto lo aplica el servidor, que ademas es el
   // unico que puede ver mas alla de tu sucursal.
   const filtered = socios
-    .filter(s => filtro === 'activos' ? s.activo : filtro === 'inactivos' ? !s.activo : true)
+    .filter(s => filtro === 'todos' || estadoSocio(s).clave === filtro)
 
   const inputCls = 'w-full rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none text-white'
 
@@ -509,7 +506,10 @@ export default function Socios() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-black text-white uppercase tracking-wide">SOCIOS</h2>
-          <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>{activos} activos · {inactivos} inactivos</p>
+          <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>
+            {cuenta('corriente')} al corriente · {cuenta('vencido')} vencidos
+            {cuenta('suspendido') > 0 && ` · ${cuenta('suspendido')} suspendidos`}
+          </p>
         </div>
         <button
           onClick={() => { setForm({ ...EMPTY, sucursal: sucursalId || '' }); setModal(true) }}
@@ -521,6 +521,8 @@ export default function Socios() {
           + Nuevo Socio
         </button>
       </div>
+
+      <SucursalSelector onChange={setSucursalFiltro} />
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg flex-1 sm:max-w-md" style={CARD_STYLE}>
@@ -536,7 +538,13 @@ export default function Socios() {
           />
         </div>
         <div className="flex gap-1 flex-wrap">
-          {[['todos', 'Todos'], ['activos', 'Activos'], ['inactivos', 'Inactivos']].map(([v, l]) => (
+          {[
+            ['todos', 'Todos'],
+            ['corriente', 'Al corriente'],
+            ['vencido', 'Vencidos'],
+            ['sin_plan', 'Sin membresía'],
+            ['suspendido', 'Suspendidos'],
+          ].map(([v, l]) => (
             <button
               key={v}
               onClick={() => setFiltro(v)}
@@ -580,6 +588,16 @@ export default function Socios() {
                       </div>
                       <div className="min-w-0">
                         <span className="text-xs font-semibold text-white">{s.nombre} {s.apellido}</span>
+                        {/* Solo aparece al buscar: el listado ya no trae visitas. Sin
+                            esta marca, el de mostrador se lee como un socio mas y
+                            recepcion le cobra una renovacion que nunca contrato. */}
+                        {s.es_visita && (
+                          <span className="ml-2 text-[9px] font-bold px-1.5 py-0.5 rounded align-middle"
+                            title="Pago una visita suelta; no esta inscrito"
+                            style={{ backgroundColor: 'rgba(139,148,158,0.15)', color: '#8b949e' }}>
+                            VISITA
+                          </span>
+                        )}
                         {/* Se ve a los socios de todas las sucursales, pero se marca
                             cuáles no son de aquí: ver no es lo mismo que dejar entrar. */}
                         {s.sucursal && sucursalId && s.sucursal !== sucursalId && (
@@ -649,12 +667,15 @@ export default function Socios() {
                     {vence || '—'}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: s.activo ? '#22c55e' : '#ef4444' }} />
-                      <span className="text-[10px] font-semibold" style={{ color: s.activo ? '#22c55e' : '#ef4444' }}>
-                        {s.activo ? 'Activo' : 'Inactivo'}
-                      </span>
-                    </div>
+                    {(() => {
+                      const e = estadoSocio(s)
+                      return (
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: e.color }} />
+                          <span className="text-[10px] font-semibold" style={{ color: e.color }}>{e.texto}</span>
+                        </div>
+                      )
+                    })()}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-3">
@@ -682,7 +703,7 @@ export default function Socios() {
                               de abrir, pero pagos, accesos y consentimientos quedan.
                               Icono de archivar y NO de bote: el bote de al lado es la
                               cancelacion ARCO, que si es irreversible. */}
-                          <button onClick={() => setEliminando(s)}
+                          <button onClick={() => { setEliminando(s); setBajaTexto('') }}
                             title="Dar de baja al socio (reversible)"
                             style={{ color: '#8b949e' }} className="transition-colors"
                             onMouseEnter={e => e.currentTarget.style.color = '#f97316'}
@@ -987,16 +1008,34 @@ export default function Socios() {
               No se borra nada: sus pagos, membresias, accesos y consentimientos se
               conservan. Se puede reactivar despues.
             </p>
+            {/* La palabra escrita, igual que en Empleados. El botón suelto se pulsa
+                por inercia desde la fila equivocada, y el socio desaparece del
+                listado sin que nadie note cuál se fue. */}
+            <label className="block mt-4">
+              <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>
+                ESCRIBE <span className="text-white font-bold">eliminar</span> PARA CONFIRMAR
+              </span>
+              <input
+                autoFocus
+                autoComplete="off"
+                value={bajaTexto}
+                onChange={e => setBajaTexto(e.target.value)}
+                placeholder="eliminar"
+                className="w-full rounded-lg px-3 py-2 text-sm mt-1 outline-none text-white"
+                style={INPUT_STYLE}
+              />
+            </label>
             <div className="flex gap-2 mt-5">
-              <button type="button" onClick={() => setEliminando(null)}
+              <button type="button" onClick={() => { setEliminando(null); setBajaTexto('') }}
                 className="flex-1 py-2.5 rounded-lg text-xs font-bold"
                 style={{ backgroundColor: '#21262d', color: '#8b949e' }}>
                 Cancelar
               </button>
-              <button type="button" onClick={eliminarSocio} disabled={eliminandoLoading}
-                className="flex-1 py-2.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+              <button type="button" onClick={eliminarSocio}
+                disabled={eliminandoLoading || bajaTexto.trim().toLowerCase() !== 'eliminar'}
+                className="flex-1 py-2.5 rounded-lg text-xs font-bold transition-all disabled:opacity-40"
                 style={{ backgroundColor: '#f97316', color: '#0d1117' }}>
-                {eliminandoLoading ? 'Dando de baja...' : 'Dar de baja'}
+                {eliminandoLoading ? 'Dando de baja...' : 'Eliminar'}
               </button>
             </div>
           </div>
@@ -1265,6 +1304,26 @@ export default function Socios() {
   )
 }
 
+
+/**
+ * El único estado que se muestra del socio, y responde a la pregunta que recepción
+ * se hace de verdad: ¿puede entrar hoy?
+ *
+ * Antes convivían dos etiquetas que se contradecían. "Activo" verde junto a una
+ * membresía vencida se leía como "todo bien" cuando esa persona iba a rebotar en la
+ * puerta: `activo` solo dice que no está dado de baja a mano, no que esté al
+ * corriente. Aquí se colapsan en un estado con el mismo orden de precedencia que
+ * aplica el check-in (CheckInView): primero la baja, luego la vigencia.
+ */
+function estadoSocio(s) {
+  if (!s.activo) return { clave: 'suspendido', texto: 'Suspendido', color: '#ef4444' }
+  if (s.membresia_activa) return { clave: 'corriente', texto: 'Al corriente', color: '#22c55e' }
+  // Sin membresía nunca es lo mismo que vencido: a uno se le cobra la renovación, al
+  // otro le falta el alta. Decir "Vencido" a quien nunca tuvo plan manda a recepción
+  // a buscar un pago que no existe.
+  if (s.membresia_reciente) return { clave: 'vencido', texto: 'Vencido', color: '#f97316' }
+  return { clave: 'sin_plan', texto: 'Sin membresía', color: '#8b949e' }
+}
 
 function vencePronto(fecha) {
   if (!fecha) return false

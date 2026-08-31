@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import api from '../api/axios'
 import toast from 'react-hot-toast'
+import { hoyLocal } from '../lib/fechas'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 const INPUT_STYLE = { backgroundColor: '#0d1117', border: '1px solid #21262d', color: '#fff' }
@@ -18,13 +19,6 @@ const TIPO = {
 }
 
 const money = n => `$${Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-
-// `toISOString()` da la fecha en UTC: a las 7 de la noche en México ya adelanta un día
-// y el corte se abriría en el de mañana, vacío, justo a la hora de cerrar la caja.
-function hoyLocal() {
-  const d = new Date()
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0]
-}
 
 function horaDe(iso) {
   if (!iso) return '—'

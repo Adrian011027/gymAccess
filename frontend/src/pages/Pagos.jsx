@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import api from '../api/axios'
+import SucursalSelector from '../components/SucursalSelector'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
 import CorteDelDia from '../components/CorteDelDia'
+import { enDias, hoyLocal } from '../lib/fechas'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 const INPUT_STYLE = { backgroundColor: '#0d1117', border: '1px solid #21262d', color: '#fff' }
@@ -20,13 +22,6 @@ const CATEGORIAS_GASTO = [
 const GASTO_EMPTY = {
   categoria: 'otro', descripcion: '', monto: '', metodo: 'efectivo', sucursal: '',
   fecha: hoyLocal(),
-}
-
-// `toISOString()` da la fecha en UTC: pasadas las 6 de la tarde en México ya
-// adelanta un día y el gasto se guardaría con la fecha de mañana.
-function hoyLocal() {
-  const d = new Date()
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0]
 }
 
 // Etiqueta de urgencia de una membresía por cobrar. En la lista combinada el
@@ -64,21 +59,28 @@ export default function Pagos() {
   const [gastoForm, setGastoForm] = useState(GASTO_EMPTY)
 
   const [sucursales, setSucursales] = useState([])
-  const [sucursalCorte, setSucursalCorte] = useState('')
+  // Un unico selector manda en toda la pagina. Tener uno propio en la vista de corte
+  // permitia dejarlos apuntando a sucursales distintas: la lista decia una cosa y el
+  // cierre del dia otra, sin nada en pantalla que explicara la diferencia.
+  const [q, setQ] = useState('')
+  const sucursalCorte = q.replace('?sucursal=', '')
 
-  const load = () => api.get('/socios/membresias/').then(r => setMembresias(r.data)).catch(() => {})
-  const loadPagos = () => api.get('/socios/pagos/').then(r => setPagos(r.data)).catch(() => {})
-  const loadGastos = () => api.get('/socios/gastos/').then(r => setGastos(r.data)).catch(() => {})
+  const load = () => api.get(`/socios/membresias/${q}`).then(r => setMembresias(r.data)).catch(() => {})
+  const loadPagos = () => api.get(`/socios/pagos/${q}`).then(r => setPagos(r.data)).catch(() => {})
+  const loadGastos = () => api.get(`/socios/gastos/${q}`).then(r => setGastos(r.data)).catch(() => {})
 
   useEffect(() => {
     load()
     loadPagos()
     if (isAdmin) loadGastos()
     api.get('/gyms/sucursales/').then(r => setSucursales(r.data)).catch(() => {})
-  }, [isAdmin])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, q])
 
-  const hoy = new Date().toISOString().split('T')[0]
-  const semana = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]
+  // Con `toISOString()` a secas, a partir de las 18:00 en México "hoy" era mañana:
+  // la membresía que vence hoy salía como "Atrasado 1 día" cada tarde-noche.
+  const hoy = hoyLocal()
+  const semana = enDias(7)
 
   const pendientes = membresias.filter(m => m.estado !== 'activa' || m.fecha_fin <= semana)
   const pendHoy    = pendientes.filter(m => m.fecha_fin === hoy || m.estado === 'pendiente_pago')
@@ -153,7 +155,7 @@ export default function Pagos() {
     .filter(m => m.estado === 'activa')
     .reduce((sum, m) => sum + Number(m.plan_precio || 0), 0)
 
-  const inicioSemana = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
+  const inicioSemana = enDias(-7)
   const pagosHoy = pagos.filter(p => p.fecha?.startsWith(hoy))
   const pagosSemana = pagos.filter(p => p.fecha?.split('T')[0] >= inicioSemana)
   const listaRegistro = (regTab === 'hoy' ? pagosHoy : pagosSemana)
@@ -172,7 +174,10 @@ export default function Pagos() {
 
   return (
     <div className="space-y-5">
-      <h2 className="text-xl font-black text-white uppercase tracking-wide">PAGOS</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-xl font-black text-white uppercase tracking-wide">PAGOS</h2>
+        <SucursalSelector onChange={setQ} />
+      </div>
 
       {/* Stat cards — el total cobrado solo lo ve el admin */}
       <div className={`grid grid-cols-2 gap-4 ${isAdmin ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
@@ -279,20 +284,7 @@ export default function Pagos() {
       {/* El corte junta cobros de membresía, ventas de tienda y gastos: el cajón
           es uno solo aunque el sistema los capture en dos módulos distintos. */}
       {vista === 'corte' && (
-        <>
-          {isAdmin && sucursales.length > 1 && (
-            <select
-              value={sucursalCorte}
-              onChange={e => setSucursalCorte(e.target.value)}
-              className="rounded-lg px-3 py-2 text-xs font-semibold outline-none text-white"
-              style={INPUT_STYLE}
-            >
-              <option value="">Todas las sucursales</option>
-              {sucursales.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
-            </select>
-          )}
-          <CorteDelDia sucursal={sucursalCorte} sucursales={sucursales} />
-        </>
+        <CorteDelDia sucursal={sucursalCorte} sucursales={sucursales} />
       )}
 
       {vista === 'registro' && (

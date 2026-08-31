@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import api from '../api/axios'
 import SucursalSelector from '../components/SucursalSelector'
+import { enDias, hoyLocal } from '../lib/fechas'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 const INPUT_STYLE = { backgroundColor: '#0d1117', border: '1px solid #21262d', color: '#fff' }
@@ -67,8 +68,8 @@ export default function Dashboard() {
   // Vencidos hoy o en los últimos 7 días y todavía sin renovar: no "todo lo
   // atrasado alguna vez" (eso ensuciaría la tarjeta con cobros ya resueltos hace
   // meses), y no solo "vence hoy" (un pago de hace 3 días sigue pendiente).
-  const hoyISO = new Date().toISOString().slice(0, 10)
-  const haceSemanaISO = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10)
+  const hoyISO = hoyLocal()
+  const haceSemanaISO = enDias(-6)
   const pagosPendientes = membresias
     .filter(m =>
       m.estado === 'pendiente_pago' ||

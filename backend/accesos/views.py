@@ -2,7 +2,7 @@ import io
 from datetime import timedelta
 
 import qrcode
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Count
 from django.db.models.functions import ExtractHour
 from django.http import HttpResponse
@@ -12,14 +12,15 @@ from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_control
 from rest_framework import viewsets, permissions, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from .enlaces import url_qr
 from .models import Acceso, MetodoAcceso, generar_token_qr
-from .serializers import AccesoSerializer, MetodoAccesoSerializer
+from .serializers import AccesoSerializer, MetodoAccesoSerializer, VisitaSerializer
 from gyms.models import Sucursal
-from socios.models import Membresia, Socio
+from socios.models import Membresia, Pago, Socio, siguiente_numero_socio
 from notificaciones.models import Notificacion
 from usuarios.models import Usuario
 from usuarios.permissions import ROLES_ADMIN
@@ -634,3 +635,76 @@ class QRPaginaView(APIView):
     </p>
   </div>
 </body></html>""", content_type='text/html; charset=utf-8')
+
+
+class RegistrarVisitaView(APIView):
+    """Da de alta al visitante de mostrador: cobra, lo deja entrar y lo registra.
+
+    El que llega de la calle, paga el día y entra no existía en el sistema: recepción
+    cobraba a mano y le abría la puerta, así que ese dinero no salía en el corte y esa
+    persona no salía en la afluencia. Justo las dos cosas que el negocio mira al
+    cerrar.
+
+    Se crea como Socio marcado `es_visita`, y no como entidad aparte, por el dinero:
+    `Pago` cuelga de una membresía y el corte de caja suma pagos de membresía. Con un
+    modelo de visita independiente el cobro del día quedaría fuera del cierre —el
+    agujero que el corte vino a tapar— o habría que sumarlo en dos sitios. De paso, el
+    visitante que vuelve y se inscribe conserva su historial: se le quita la marca.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'checkin'
+
+    def post(self, request):
+        entrada = VisitaSerializer(data=request.data, context={'request': request})
+        entrada.is_valid(raise_exception=True)
+        v = entrada.validated_data
+        sucursal, plan = v['sucursal'], v['plan']
+
+        # Recepción cobra en su puerta. Igual que en la venta de tienda: sin esto, un
+        # POST con la sucursal de al lado mete la visita y su cobro en el corte ajeno.
+        propia = getattr(request.user, 'sucursal_id', None)
+        if propia is not None and sucursal.id != propia:
+            raise ValidationError(
+                {'sucursal': 'Solo puedes registrar visitas en tu sucursal.'}
+            )
+
+        hoy = timezone.localdate()
+        with transaction.atomic():
+            socio = Socio.objects.create(
+                gym_id=request.user.gym_id,
+                sucursal=sucursal,
+                nombre=v['nombre'].strip(),
+                apellido=v.get('apellido', '').strip(),
+                telefono=v.get('telefono', '').strip(),
+                es_visita=True,
+                numero_socio=siguiente_numero_socio(request.user.gym_id),
+            )
+            membresia = Membresia.objects.create(
+                socio=socio, plan=plan, sucursal=sucursal,
+                fecha_inicio=hoy,
+                # Vale por hoy: mañana ya no está vigente y no vuelve a abrir la
+                # puerta. Sin fecha_fin sería un pase indefinido pagado como un día.
+                fecha_fin=hoy,
+                estado='activa',
+            )
+            pago = Pago.objects.create(
+                membresia=membresia, monto=v['monto'], metodo=v['metodo'],
+                registrado_por=request.user,
+            )
+            acceso = Acceso.objects.create(
+                socio=socio, sucursal=sucursal, membresia=membresia,
+                metodo_usado='manual', resultado='permitido',
+            )
+
+        return Response({
+            'socio_id': socio.id,
+            'numero_socio': socio.numero_socio,
+            'nombre': f'{socio.nombre} {socio.apellido}'.strip(),
+            'plan': plan.nombre,
+            'monto': pago.monto,
+            'metodo': pago.metodo,
+            'acceso_id': acceso.id,
+            'sucursal': sucursal.nombre,
+        }, status=status.HTTP_201_CREATED)

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import api from '../api/axios'
 import { useAuth } from '../context/AuthContext'
+import RegistroVisita from '../components/RegistroVisita'
 
 const RESET_MS = 6000 // el resultado se limpia solo para el siguiente socio
 
@@ -129,7 +130,16 @@ export default function CheckIn() {
   }
 
   return (
-    <div className="min-h-full flex flex-col items-center justify-center py-4 sm:py-8">
+    // Tres columnas en pantallas anchas: el registro de visitas se va al hueco de la
+    // derecha y las dos laterales son `1fr`, asi que la columna del escaneo queda
+    // centrada en la pantalla este el panel abierto o cerrado. Es el flujo principal
+    // del kiosco: no puede bailar de sitio segun lo que haga recepcion. Por debajo de
+    // `xl` no hay costado y todo vuelve a apilarse.
+    <div className="min-h-full py-4 sm:py-8 flex flex-col items-center justify-center gap-4 sm:gap-6 xl:grid xl:grid-cols-[1fr_auto_1fr] xl:items-center xl:gap-6">
+      {/* Espejo del panel: sin esta columna vacia el grid no tendria contra que
+          centrar la del escaneo, y se iria a la izquierda. */}
+      <div className="hidden xl:block" aria-hidden="true" />
+
       <div className="w-full max-w-xl space-y-4 sm:space-y-6">
 
         {/* Encabezado con reloj */}
@@ -388,6 +398,13 @@ export default function CheckIn() {
           )}
         </div>
       </div>
+
+      {/* Visitante de mostrador: ni tiene código ni está en el padrón. Vive aparte
+          para que abrir el formulario no empuje hacia abajo la búsqueda por nombre,
+          que es la otra cosa que recepción usa a media fila. */}
+      <aside className="w-full max-w-xl xl:max-w-sm xl:justify-self-start">
+        <RegistroVisita sucursal={sucursal} />
+      </aside>
     </div>
   )
 }

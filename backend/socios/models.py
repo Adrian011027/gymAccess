@@ -68,6 +68,26 @@ class PrecioPlanSucursal(models.Model):
         return f'{self.plan.nombre} @ {self.sucursal.nombre}: ${self.precio}'
 
 
+def siguiente_numero_socio(gym_id):
+    """Siguiente consecutivo libre del gym (empieza en 1000).
+
+    Vive aquí y no dentro de `SocioViewSet` porque ahora hay dos altas distintas —el
+    alta normal y el registro de visitas del mostrador— y el número tiene un
+    UniqueConstraint por gym: dos copias de esta cuenta que se desincronicen no dan un
+    número raro, dan un IntegrityError en la cara de recepción.
+
+    `select_for_update` serializa a los que compiten por el mismo consecutivo (en
+    SQLite es inerte, pero deja el código correcto sobre Postgres). Debe llamarse
+    dentro de una transacción.
+    """
+    ultimo = (
+        Socio.objects.select_for_update()
+        .filter(gym_id=gym_id)
+        .aggregate(m=models.Max('numero_socio'))['m']
+    )
+    return (ultimo or 999) + 1
+
+
 class SocioQuerySet(models.QuerySet):
     def vivos(self):
         """Los que no están dados de baja lógicamente.
@@ -78,11 +98,33 @@ class SocioQuerySet(models.QuerySet):
         """
         return self.filter(eliminado_en__isnull=True)
 
+    def padron(self):
+        """Los socios propiamente dichos: sin los visitantes de mostrador.
+
+        Una visita es un `Socio` marcado `es_visita` porque su cobro tiene que colgar
+        de una membresía para entrar al corte del día (ver `RegistrarVisitaView`). El
+        efecto secundario es que cada persona que paga un día aparecería en el padrón:
+        en un gym con cincuenta visitas al mes, recepción deja de encontrar a los
+        suyos y el conteo de socios que factura el SaaS se infla con gente que nunca
+        se inscribió.
+
+        Vive aquí junto a `vivos()` por lo mismo que aquella: una sola definición, o
+        cada módulo cuenta un padrón distinto.
+        """
+        return self.filter(es_visita=False)
+
 
 class Socio(models.Model):
     SEXO_CHOICES = [('M', 'Masculino'), ('F', 'Femenino'), ('O', 'Otro')]
 
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='socios')
+    # Marca al que entró pagando una visita suelta y nunca se inscribió. Existe para
+    # que el padrón siga siendo el padrón: sin esto, cada persona que pasa un día por
+    # el gym engorda el listado de Socios y recepción deja de encontrar a los suyos.
+    #
+    # Es una marca, no un tipo aparte: si el visitante vuelve y se inscribe, se le
+    # quita la marca y conserva su historial de accesos y pagos desde el primer día.
+    es_visita = models.BooleanField(default=False)
     # Consecutivo por gym, empieza en 1000 (SocioViewSet.perform_create lo asigna).
     # Es el número que recepción dice en voz alta, se imprime y se busca a mano;
     # a propósito NO es el código del QR: ese sigue con su parte aleatoria porque

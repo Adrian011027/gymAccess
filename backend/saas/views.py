@@ -56,7 +56,13 @@ class TenantViewSet(viewsets.ModelViewSet):
             # reactive sin restaurar al socio.
             num_socios=Count(
                 'socios',
-                filter=Q(socios__activo=True, socios__eliminado_en__isnull=True),
+                # `es_visita=False`: es el numero con el que se le argumenta al gym
+                # que suba de paquete. Contar ahi a los que pagaron un dia suelto lo
+                # infla con gente que nunca se inscribio.
+                filter=Q(
+                    socios__activo=True, socios__eliminado_en__isnull=True,
+                    socios__es_visita=False,
+                ),
                 distinct=True,
             ),
         ).order_by('-creado_en')
@@ -183,7 +189,7 @@ class ResumenView(APIView):
         gyms = Gym.objects.all()
         socios_vigentes = (
             Membresia.objects.vigentes()
-            .filter(socio__eliminado_en__isnull=True)
+            .filter(socio__eliminado_en__isnull=True, socio__es_visita=False)
             .values('socio_id').distinct().count()
         )
         return Response({
@@ -192,7 +198,7 @@ class ResumenView(APIView):
             'gyms_suspendidos': gyms.filter(activo=False).count(),
             'sucursales': Sucursal.objects.filter(activa=True).count(),
             'empleados': Usuario.objects.filter(is_active=True, gym__isnull=False).count(),
-            'socios': Socio.objects.vivos().filter(activo=True).count(),
+            'socios': Socio.objects.vivos().padron().filter(activo=True).count(),
             # Socios que hoy pueden entrar. Es la medida de uso real del producto y
             # la que sostiene el argumento de subir de paquete.
             'socios_vigentes': socios_vigentes,

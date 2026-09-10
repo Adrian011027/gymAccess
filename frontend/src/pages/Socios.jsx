@@ -953,12 +953,14 @@ export default function Socios() {
                 </div>
               )}
               {/* Solo si el gym ya publicó un aviso: no se puede consentir un
-                  documento que no existe. El backend aplica la misma condición. */}
+                  documento que no existe. Ya no es obligatoria: si no se marca
+                  aquí, el socio queda "sin consentimiento" y lo acepta después
+                  desde el link que le llega con su QR por WhatsApp. */}
               {!form.id && aviso && (
                 <label className="flex items-start gap-2.5 rounded-lg p-3 cursor-pointer"
                   style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
                   <input
-                    type="checkbox" required
+                    type="checkbox"
                     checked={!!form.acepta_aviso}
                     onChange={e => setForm(f => ({ ...f, acepta_aviso: e.target.checked }))}
                     className="mt-0.5 shrink-0"
@@ -971,7 +973,9 @@ export default function Socios() {
                       className="font-semibold underline" style={{ color: '#22c55e' }}>
                       aviso de privacidad
                     </button>
-                    {' '}(v{aviso.version}). Queda registrado con fecha y hora.
+                    {' '}(v{aviso.version}) aquí en mostrador. Queda registrado con fecha y
+                    hora. Si lo dejas sin marcar, podrás enviárselo por WhatsApp junto
+                    con su código QR para que lo acepte después.
                   </span>
                 </label>
               )}

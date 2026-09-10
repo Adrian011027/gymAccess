@@ -160,20 +160,18 @@ class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
     def registrar_consentimiento(self, socio, acepta_aviso):
         """Guarda la evidencia de que el socio aceptó el aviso de privacidad vigente.
 
-        Solo se exige si el gym ya publicó uno: no se puede consentir un documento
-        que no existe, y obligarlo antes dejaría el alta bloqueada sin salida.
+        Marcar la casilla ya no es obligatorio para dar de alta: hay socios que
+        llegan sin poder leerlo en el mostrador (prisa, sin gafas, el que inscribe
+        no es el socio). Si no se acepta aquí, el socio queda sin consentimiento
+        —visible como "Sin consentimiento" en el listado— y lo acepta después desde
+        el link que le llega con su QR por WhatsApp (`legal.AvisoPublicoView`).
         """
         from legal.models import ConsentimientoSocio, DocumentoLegal
         from legal.views import ip_de
 
         aviso = DocumentoLegal.vigente(DocumentoLegal.AVISO_PRIVACIDAD, socio.gym_id)
-        if not aviso:
+        if not aviso or not acepta_aviso:
             return
-        if not acepta_aviso:
-            raise ValidationError({
-                'acepta_aviso': 'Falta la aceptación del aviso de privacidad por parte '
-                                'del socio o de su tutor.',
-            })
         ConsentimientoSocio.objects.create(
             socio=socio,
             documento=aviso,

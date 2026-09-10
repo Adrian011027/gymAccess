@@ -5,7 +5,7 @@ import qrcode
 from django.db import models, transaction
 from django.db.models import Count
 from django.db.models.functions import ExtractHour
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseRedirect
 from django.urls import reverse
 from django.utils.html import escape
 from django.utils import timezone
@@ -516,6 +516,113 @@ class StatsView(SucursalScopedMixin, APIView):
         })
 
 
+def _markdown_a_html(texto):
+    """Conversión mínima de Markdown a HTML para la página pública del aviso.
+
+    Cubre justo lo que traen los documentos legales —encabezados, listas, negritas y
+    párrafos— porque es lo único que aparece en `legal/aviso-privacidad.md`. No hay
+    librería de Markdown en las dependencias del backend y traer una para esto sería
+    una dependencia entera a cambio de cuatro reglas.
+    """
+    import re
+
+    def inline(s):
+        s = escape(s)
+        return re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', s)
+
+    bloques = []
+    lista = []
+    parrafo = []
+
+    def cerrar_lista():
+        if lista:
+            bloques.append('<ul>' + ''.join(f'<li>{inline(it)}</li>' for it in lista) + '</ul>')
+            lista.clear()
+
+    def cerrar_parrafo():
+        if parrafo:
+            bloques.append(f'<p>{inline(" ".join(parrafo))}</p>')
+            parrafo.clear()
+
+    # Igual que el equivalente en JS (components/Markdown.jsx): las líneas seguidas
+    # sin línea en blanco entre ellas son un solo párrafo, así que se juntan ANTES de
+    # aplicar `inline`. Procesarlas una a una rompía una negrita que el borrador
+    # partía en dos líneas: **no rastrea a los\nsocios...similares** llegaba a la
+    # página como dos asteriscos sueltos en vez de texto en negrita.
+    for linea in texto.split('\n'):
+        cruda = linea.strip()
+        if not cruda:
+            cerrar_lista()
+            cerrar_parrafo()
+            continue
+        if cruda.startswith('#'):
+            cerrar_lista()
+            cerrar_parrafo()
+            nivel = min(len(cruda) - len(cruda.lstrip('#')), 4)
+            bloques.append(f'<h{nivel + 1}>{inline(cruda.lstrip("#").strip())}</h{nivel + 1}>')
+            continue
+        if cruda.startswith('- '):
+            cerrar_parrafo()
+            lista.append(cruda[2:])
+            continue
+        if cruda.startswith('---'):
+            cerrar_lista()
+            cerrar_parrafo()
+            bloques.append('<hr>')
+            continue
+        cerrar_lista()
+        parrafo.append(cruda)
+    cerrar_lista()
+    cerrar_parrafo()
+    return ''.join(bloques)
+
+
+def _pagina_aviso(gym, aviso):
+    """Aviso de privacidad + botón de aceptar, antes de entregar el QR.
+
+    Sin JavaScript: es un formulario que hace POST a esta misma URL. Funciona igual
+    en el navegador más viejo que abra el enlace desde WhatsApp.
+    """
+    contenido = _markdown_a_html(aviso.contenido)
+    titulo = escape(aviso.titulo)
+    version = escape(aviso.version)
+    return f"""<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aviso de privacidad · {gym}</title>
+<style>
+  h2 {{ font-size:16px; margin:20px 0 8px }}
+  h3 {{ font-size:14px; margin:16px 0 6px }}
+  p, li {{ font-size:13px; line-height:1.6; color:#c9d1d9 }}
+  ul {{ padding-left:20px; margin:6px 0 }}
+  strong {{ color:#fff }}
+  hr {{ border:none; border-top:1px solid #21262d; margin:20px 0 }}
+</style>
+</head>
+<body style="margin:0;background:#0d1117;color:#fff;font-family:system-ui,-apple-system,sans-serif;
+             min-height:100vh;padding:24px;box-sizing:border-box">
+  <div style="max-width:480px;margin:0 auto">
+    <p style="font-size:12px;letter-spacing:.18em;color:#8b949e;margin:0 0 4px">{gym}</p>
+    <h1 style="font-size:18px;font-weight:800;margin:0 0 4px">{titulo}</h1>
+    <p style="font-size:11px;color:#8b949e;margin:0 0 16px">Versión {version}</p>
+    <div style="background:#161b22;border:1px solid #21262d;border-radius:16px;padding:16px;
+                max-height:55vh;overflow-y:auto">
+      {contenido}
+    </div>
+    <form method="POST" style="margin-top:16px">
+      <button type="submit" style="width:100%;padding:14px;border:none;border-radius:12px;
+              background:#22c55e;color:#0d1117;font-weight:800;font-size:14px;cursor:pointer">
+        Acepto el aviso de privacidad
+      </button>
+    </form>
+    <p style="font-size:11px;color:#8b949e;text-align:center;margin-top:12px">
+      Al aceptar verás tu código QR de acceso.
+    </p>
+  </div>
+</body></html>"""
+
+
 class QRImagenView(APIView):
     """El QR de un socio como PNG, en una URL que se puede abrir sin sesión.
 
@@ -588,7 +695,7 @@ class QRPaginaView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'qr_publico'
 
-    def get(self, request, token):
+    def _metodo_vivo(self, token):
         metodo = MetodoAcceso.objects.select_related('socio__gym').filter(
             token=token, tipo='qr', activo=True,
         ).first()
@@ -597,6 +704,26 @@ class QRPaginaView(APIView):
             or metodo.socio.eliminado_en is not None
             or not metodo.socio.activo
         ):
+            return None
+        return metodo
+
+    def _aviso_pendiente(self, socio):
+        """El aviso vigente del gym, si el socio (o su tutor) todavía no lo aceptó.
+
+        None si ya lo aceptó o si el gym no ha publicado ninguno: en ambos casos no
+        hay nada que bloquee la entrega del QR.
+        """
+        from legal.models import ConsentimientoSocio, DocumentoLegal
+        aviso = DocumentoLegal.vigente(DocumentoLegal.AVISO_PRIVACIDAD, socio.gym_id)
+        if not aviso:
+            return None
+        if ConsentimientoSocio.objects.filter(socio=socio, documento=aviso).exists():
+            return None
+        return aviso
+
+    def get(self, request, token):
+        metodo = self._metodo_vivo(token)
+        if metodo is None:
             return HttpResponse(
                 '<!doctype html><meta charset="utf-8">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -607,6 +734,15 @@ class QRPaginaView(APIView):
             )
 
         gym = escape(metodo.socio.gym.nombre if metodo.socio.gym_id else 'tu gimnasio')
+
+        # El QR es la credencial que abre la puerta: antes de mostrarlo se exige
+        # aceptar el aviso de privacidad vigente, igual que se exigiría en mostrador.
+        # Sin este freno, un socio dado de alta sin marcar la casilla recibía su QR
+        # por WhatsApp sin haber aceptado nunca nada.
+        aviso = self._aviso_pendiente(metodo.socio)
+        if aviso is not None:
+            return HttpResponse(_pagina_aviso(gym, aviso), content_type='text/html; charset=utf-8')
+
         png = url_qr(request, metodo.token, 'qr-imagen')
         return HttpResponse(f"""<!doctype html>
 <html lang="es"><head>
@@ -635,6 +771,37 @@ class QRPaginaView(APIView):
     </p>
   </div>
 </body></html>""", content_type='text/html; charset=utf-8')
+
+    def post(self, request, token):
+        """Registra la aceptación del aviso y, hecho eso, entrega el QR.
+
+        Sin sesión ni CSRF de por medio a propósito, igual que el GET: el token en la
+        URL es la única credencial que hay, y ya es la misma que abre la puerta.
+        """
+        metodo = self._metodo_vivo(token)
+        if metodo is None:
+            return HttpResponse(status=404)
+
+        from legal.models import ConsentimientoSocio, DocumentoLegal
+        from legal.views import ip_de
+
+        socio = metodo.socio
+        aviso = DocumentoLegal.vigente(DocumentoLegal.AVISO_PRIVACIDAD, socio.gym_id)
+        if aviso is not None:
+            ConsentimientoSocio.objects.get_or_create(
+                socio=socio, documento=aviso,
+                defaults={
+                    'otorgado_por': 'tutor' if socio.es_menor else 'socio',
+                    'medio': 'digital',
+                    'tutor_nombre': socio.tutor_nombre,
+                    'tutor_parentesco': socio.tutor_parentesco,
+                    'ip': ip_de(request),
+                },
+            )
+        # 303 y no un simple render: evita que un F5 del socio reenvíe el POST y
+        # duplique el intento de crear el consentimiento (get_or_create lo tolera,
+        # pero la URL de la barra de direcciones debe volver a ser la del GET).
+        return HttpResponseRedirect(reverse('qr-pagina', kwargs={'token': token}))
 
 
 class RegistrarVisitaView(APIView):

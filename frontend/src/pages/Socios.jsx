@@ -182,6 +182,18 @@ export default function Socios() {
     win.print()
   }
 
+  // wa.me exige el teléfono en dígitos con código de país. A 10 dígitos (formato
+  // que captura recepción) se le antepone 52 (México); si ya trae código de país
+  // capturado a mano, se respeta tal cual.
+  const enviarWhatsApp = socio => {
+    const digitos = (socio.telefono || '').replace(/\D/g, '')
+    if (!digitos) return
+    const numero = digitos.length === 10 ? `52${digitos}` : digitos
+    const link = `${window.location.origin}/aviso/${socio.codigo_acceso}`
+    const texto = `Hola ${socio.nombre}, antes de darte tu código de acceso necesitamos que aceptes nuestro aviso de privacidad. Ábrelo aquí: ${link}`
+    window.open(`https://wa.me/${numero}?text=${encodeURIComponent(texto)}`, '_blank')
+  }
+
   const exportarDatos = async socio => {
     try {
       const { data } = await api.get(`/socios/${socio.id}/datos-personales/`)
@@ -829,12 +841,14 @@ export default function Socios() {
                 </div>
               )}
               {/* Solo si el gym ya publicó un aviso: no se puede consentir un
-                  documento que no existe. El backend aplica la misma condición. */}
+                  documento que no existe. Ya no es obligatoria: si no se marca
+                  aquí, el socio queda "sin consentimiento" y lo acepta después
+                  desde el link que le llega con su QR por WhatsApp. */}
               {!form.id && aviso && (
                 <label className="flex items-start gap-2.5 rounded-lg p-3 cursor-pointer"
                   style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
                   <input
-                    type="checkbox" required
+                    type="checkbox"
                     checked={!!form.acepta_aviso}
                     onChange={e => setForm(f => ({ ...f, acepta_aviso: e.target.checked }))}
                     className="mt-0.5 shrink-0"
@@ -847,7 +861,9 @@ export default function Socios() {
                       className="font-semibold underline" style={{ color: '#22c55e' }}>
                       aviso de privacidad
                     </button>
-                    {' '}(v{aviso.version}). Queda registrado con fecha y hora.
+                    {' '}(v{aviso.version}) aquí en mostrador. Queda registrado con fecha y
+                    hora. Si lo dejas sin marcar, podrás enviárselo por WhatsApp junto
+                    con su código QR para que lo acepte después.
                   </span>
                 </label>
               )}
@@ -1078,6 +1094,21 @@ export default function Socios() {
                     Imprimir
                   </button>
                 </div>
+                {/* El QR no viaja solo: el link obliga a aceptar el aviso de
+                    privacidad antes de mostrarlo, así que enviarlo por WhatsApp
+                    también deja evidencia del consentimiento del socio. */}
+                <button
+                  onClick={() => enviarWhatsApp(qrModal)}
+                  disabled={!qrModal.telefono}
+                  title={qrModal.telefono ? '' : 'Este socio no tiene teléfono registrado'}
+                  className="w-full mt-3 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-40"
+                  style={{ backgroundColor: '#25D366', color: '#052e16' }}
+                >
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.27-1.38a9.9 9.9 0 0 0 4.77 1.21h.01c5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.78 14.15c-.24.68-1.42 1.3-1.96 1.38-.5.08-1.13.11-1.82-.12-.42-.13-.96-.31-1.65-.6-2.9-1.25-4.79-4.17-4.94-4.36-.14-.2-1.18-1.57-1.18-3 0-1.42.75-2.12 1.02-2.41.27-.29.58-.36.78-.36.19 0 .39 0 .56.01.18.01.42-.07.65.5.24.58.82 2 .89 2.14.07.15.12.32.02.51-.09.19-.14.31-.28.48-.14.16-.29.36-.42.49-.14.14-.28.29-.12.56.16.28.71 1.17 1.52 1.9 1.05.94 1.93 1.23 2.21 1.37.28.14.44.12.6-.07.16-.19.7-.82.89-1.1.19-.28.38-.23.63-.14.26.09 1.63.77 1.91.91.28.14.47.21.54.33.07.12.07.68-.17 1.36z" />
+                  </svg>
+                  Enviar por WhatsApp
+                </button>
               </>
             ) : (
               <>

@@ -50,7 +50,7 @@ No vendemos, cedemos ni transferimos tus datos personales a terceros con fines
 comerciales.
 
 Para operar utilizamos un sistema de administración proporcionado por
-**[NOMBRE DEL PROVEEDOR DEL SOFTWARE]**, que actúa como **encargado** del
+**GymAccess**, que actúa como **encargado** del
 tratamiento: procesa los datos únicamente por nuestra cuenta y bajo nuestras
 instrucciones, conforme a un convenio que le prohíbe darles cualquier otro uso. Esto
 no constituye una transferencia que requiera tu consentimiento (art. 37 LFPDPPP).

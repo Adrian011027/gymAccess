@@ -12,6 +12,7 @@
 | Archivo | Quién lo emite | A quién protege | ¿Obligatorio? |
 |---|---|---|---|
 | `aviso-privacidad.md` | El dueño del gym → sus socios | Al gym | **Sí** (LFPDPPP arts. 15-18) |
+| `aviso-privacidad-proveedor.md` | GymAccess → dueños/admins/recepción/coaches | A GymAccess | **Sí** (LFPDPPP arts. 15-18; de esos datos GymAccess es responsable, no encargado) |
 | `terminos-servicio.md` | El proveedor del software → el gym | Al proveedor | No, pero sin él no hay límite de responsabilidad |
 | `convenio-encargado.md` | Ambos lo firman | **A los dos** | **Sí** en la práctica (LFPDPPP art. 3 fr. IX y RLFPDPPP art. 51) |
 

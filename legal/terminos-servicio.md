@@ -2,7 +2,7 @@
 
 **Borrador — requiere revisión legal antes de usarse.**
 
-Entre **[NOMBRE O RAZÓN SOCIAL DEL PROVEEDOR]** (el "Proveedor") y el cliente que
+Entre **GymAccess** (el "Proveedor") y el cliente que
 contrata el servicio (el "Cliente"), respecto del sistema de administración de
 gimnasios **GymAccess** (el "Software").
 
@@ -113,10 +113,10 @@ de esa fecha equivale a su aceptación.
 
 Estos Términos se rigen por las leyes de los Estados Unidos Mexicanos. Para su
 interpretación y cumplimiento, las partes se someten a los tribunales competentes de
-**[CIUDAD, ESTADO]**, renunciando a cualquier otro fuero.
+**Guadalajara, Jalisco**, renunciando a cualquier otro fuero.
 
 ---
 
 **Versión:** [1.0]
 **Fecha de entrada en vigor:** [FECHA]
-**Contacto del Proveedor:** [CORREO] · [TELÉFONO]
+**Contacto del Proveedor:** [CORREO] · 33 2233 2046

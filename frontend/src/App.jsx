@@ -3,6 +3,7 @@ import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/layout/Layout'
 import Login from './pages/Login'
+import AvisoPrivacidad from './pages/AvisoPrivacidad'
 import SaasLogin from './pages/SaasLogin'
 import CheckIn from './pages/CheckIn'
 import Dashboard from './pages/Dashboard'
@@ -48,6 +49,7 @@ export default function App() {
         />
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/aviso/:token" element={<AvisoPrivacidad />} />
           <Route path="/saas/login" element={<SaasLogin />} />
           <Route path="/seleccionar-sucursal" element={<SeleccionarSucursal />} />
           <Route path="/saas" element={<SaasLayout />}>

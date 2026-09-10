@@ -7,7 +7,7 @@
 > distinga una posición de la otra.
 
 Convenio que celebran, por una parte, **[NOMBRE O RAZÓN SOCIAL DEL GIMNASIO]**, en su
-carácter de **RESPONSABLE**, y por la otra, **[NOMBRE O RAZÓN SOCIAL DEL PROVEEDOR]**,
+carácter de **RESPONSABLE**, y por la otra, **GymAccess**,
 en su carácter de **ENCARGADO**, al tenor de las siguientes cláusulas.
 
 ## Declaraciones
@@ -75,8 +75,8 @@ para alojar el servicio:
 
 | Subencargado | Servicio | Ubicación de los datos |
 |---|---|---|
-| [PROVEEDOR DE NUBE] | Servidores y base de datos | [PAÍS] |
-| [PROVEEDOR DE RESPALDOS] | Copias de seguridad | [PAÍS] |
+| DigitalOcean, LLC | Servidores y base de datos | [PAÍS DEL DATACENTER — confirmar región del droplet] |
+| DigitalOcean, LLC (Spaces / backups) | Copias de seguridad | [PAÍS DEL DATACENTER — confirmar región] |
 
 El Encargado **responde ante el Responsable** por los actos de sus subencargados como
 si fueran propios, y se obliga a imponerles por escrito obligaciones no menos
@@ -134,15 +134,15 @@ obligaciones.
 ### NOVENA. Legislación y jurisdicción
 
 Se rige por las leyes de los Estados Unidos Mexicanos. Las partes se someten a los
-tribunales competentes de **[CIUDAD, ESTADO]**.
+tribunales competentes de **Guadalajara, Jalisco**.
 
 ---
 
-Firmado en **[CIUDAD]** a **[FECHA]**.
+Firmado en **Guadalajara, Jalisco** a **[FECHA]**.
 
 | EL RESPONSABLE | EL ENCARGADO |
 |---|---|
 | | |
 | ______________________ | ______________________ |
 | [NOMBRE Y CARGO] | [NOMBRE Y CARGO] |
-| [GIMNASIO] | [PROVEEDOR] |
+| [GIMNASIO] | GymAccess |

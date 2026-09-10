@@ -1,17 +1,23 @@
 from datetime import timedelta
+from decimal import Decimal
 
 from django.db import models, transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from rest_framework import status, viewsets, permissions
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from accesos.models import MetodoAcceso, generar_token_qr
+from gyms.models import Sucursal
+from tienda.models import Venta
 from usuarios.models import Usuario
 from usuarios.permissions import ROLES_ADMIN, AdminOSoloLectura, EsAdminGym
 from usuarios.scoping import SucursalScopedMixin
-from .models import AjusteMembresia, Plan, Socio, Membresia, Pago, Gasto
+from .models import (
+    AjusteMembresia, Plan, Socio, Membresia, Pago, Gasto, siguiente_numero_socio,
+)
 from .serializers import (
     AjusteMembresiaSerializer, AjusteVencimientoInputSerializer,
     PlanSerializer, SocioSerializer, MembresiaSerializer,
@@ -93,7 +99,14 @@ class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
 
         buscar = self.request.query_params.get('buscar', '').strip()
         if not buscar:
-            return self.scope_sucursal(qs)
+            # El listado a secas es el padrón: sin visitas de mostrador.
+            return self.scope_sucursal(qs.padron())
+
+        # Con `buscar` sí salen, a propósito. El visitante que vuelve a inscribirse se
+        # busca por su nombre; si no apareciera, recepción lo daría de alta otra vez y
+        # perdería el historial de accesos y pagos que la marca existe para conservar.
+        # Las acciones de detalle tampoco filtran, por lo mismo: hay que poder abrir
+        # esa ficha para quitarle la marca.
 
         # Cada palabra debe aparecer en algún campo, no la cadena entera en uno solo:
         # si no, "Juan Pérez" no encuentra a nadie, porque ningún `nombre` contiene el
@@ -134,16 +147,7 @@ class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
         extra = {}
         if serializer.validated_data.get('sucursal') is None and self.sucursal_id:
             extra['sucursal_id'] = self.sucursal_id
-        # `select_for_update` serializa a los que compiten por el mismo consecutivo
-        # (en SQLite es inerte, pero deja el código correcto para cuando el gym pase
-        # a Postgres). El registro nunca revienta por choque: se sirve un número por
-        # vez dentro de esta transacción.
-        ultimo = (
-            Socio.objects.select_for_update()
-            .filter(gym_id=gym_id)
-            .aggregate(m=models.Max('numero_socio'))['m']
-        )
-        extra['numero_socio'] = (ultimo or 999) + 1
+        extra['numero_socio'] = siguiente_numero_socio(gym_id)
         socio = serializer.save(gym_id=gym_id, **extra)
         # Cada socio nuevo recibe su código de acceso automáticamente
         MetodoAcceso.objects.create(
@@ -348,7 +352,7 @@ class MembresiaViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
         # `socio__eliminado_en__isnull=True`: la membresia de un socio dado de baja
         # seguia apareciendo en "Por cobrar" de /pagos, de modo que recepcion veia una
         # deuda de alguien que ya no existe en el listado y no podia hacer nada con ella.
-        return self.scope_sucursal(
+        qs = self.scope_sucursal(
             Membresia.objects.filter(
                 socio__gym_id=self.request.user.gym_id,
                 socio__eliminado_en__isnull=True,
@@ -359,6 +363,20 @@ class MembresiaViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
                 to_attr='precios_sucursal_prefetched',
             )
         )
+        # Misma razon que `eliminado_en` justo arriba: lo que se lista aqui alimenta
+        # "Por cobrar" de /pagos y el pendiente del Dashboard, y ninguna de las dos
+        # cosas se le puede reclamar a un visitante.
+        #
+        # Su membresia de un dia nace venciendo hoy, asi que el filtro de atrasados
+        # ("fecha_fin ya paso") la marcaba como cobro pendiente al dia siguiente de
+        # haberla cobrado, y el del Dashboard ("vence hoy") el mismo dia. Recepcion
+        # veia una deuda de $70 de alguien que ya pago, entro y se fue.
+        #
+        # Solo en `list`: el detalle tiene que seguir alcanzable para cuando el
+        # visitante se inscribe y se le quita la marca.
+        if self.action == 'list':
+            qs = qs.filter(socio__es_visita=False)
+        return qs
 
     def _validar_pertenencia(self, serializer):
         """El queryset de lectura ya filtra por gym, pero la escritura no validaba nada:
@@ -505,6 +523,121 @@ class PagoViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
         membresia.save()
         return pago
 
+    @action(detail=False, methods=['get'])
+    def corte(self, request):
+        """Corte de caja de un día: qué entró, por dónde entró y qué debe haber en el cajón.
+
+        Junta las tres fuentes de dinero del día en una sola pantalla porque el cajón
+        es uno solo: cobros de membresía, ventas de tienda y gastos pagados desde la
+        caja. Hasta ahora recepción tenía los cobros en Pagos y las ventas en el POS,
+        sin ningún lugar donde se sumaran, así que al cerrar no había forma de saber
+        cuánto se hizo en el día ni cuánto efectivo debía haber.
+
+        `?fecha=AAAA-MM-DD` (default hoy) y `?sucursal=<id>` (solo el dueño; a
+        recepción se le ignora y siempre ve su propia caja).
+        """
+        dia = self._fecha_de_corte(request)
+        objetivo = self.sucursal_id or self.sucursal_solicitada()
+        gym_id = request.user.gym_id
+
+        pagos = self.get_queryset().filter(fecha__date=dia).select_related(
+            'membresia__socio', 'membresia__plan', 'registrado_por',
+        )
+
+        ventas = Venta.objects.filter(gym_id=gym_id, fecha__date=dia)
+        gastos = Gasto.objects.filter(gym_id=gym_id, fecha=dia)
+        if objetivo is not None:
+            ventas = ventas.filter(sucursal_id=objetivo)
+            # Solo los gastos de ESTA sucursal. Los que se guardaron sin sucursal son
+            # del negocio entero (renta del corporativo, contador) y no salieron de
+            # este cajón: sumarlos aquí los contaría una vez por cada local.
+            gastos = gastos.filter(sucursal_id=objetivo)
+        ventas = ventas.select_related('vendido_por').prefetch_related('items__producto')
+        gastos = gastos.select_related('registrado_por')
+
+        movimientos = []
+        for p in pagos:
+            movimientos.append({
+                'tipo': 'membresia',
+                'fecha': p.fecha,
+                'concepto': f'{p.membresia.socio} · {p.membresia.plan.nombre}',
+                'metodo': p.metodo,
+                'monto': p.monto,
+                'signo': 1,
+                'registrado_por': getattr(p.registrado_por, 'nombre', None),
+                'referencia': p.referencia,
+            })
+        for v in ventas:
+            detalle = ', '.join(f'{i.cantidad}× {i.producto.nombre}' for i in v.items.all())
+            movimientos.append({
+                'tipo': 'tienda',
+                'fecha': v.fecha,
+                'concepto': detalle or f'Venta #{v.id}',
+                'metodo': v.metodo,
+                'monto': v.total,
+                'signo': 1,
+                'registrado_por': getattr(v.vendido_por, 'nombre', None),
+                'referencia': f'#{v.id}',
+            })
+        for g in gastos:
+            movimientos.append({
+                'tipo': 'gasto',
+                # Gasto solo guarda el día, no la hora: va sin hora y al final del día.
+                'fecha': None,
+                'concepto': f'{g.get_categoria_display()} · {g.descripcion}',
+                'metodo': g.metodo,
+                'monto': g.monto,
+                'signo': -1,
+                'registrado_por': getattr(g.registrado_por, 'nombre', None),
+                'referencia': '',
+            })
+        movimientos.sort(key=lambda m: (m['fecha'] is None, m['fecha'] or timezone.now()))
+
+        cobros = self._desglosar(m for m in movimientos if m['signo'] > 0)
+        membresias = self._desglosar(m for m in movimientos if m['tipo'] == 'membresia')
+        tienda = self._desglosar(m for m in movimientos if m['tipo'] == 'tienda')
+        egresos = self._desglosar(m for m in movimientos if m['signo'] < 0)
+
+        sucursal = Sucursal.objects.filter(id=objetivo).first() if objetivo else None
+
+        return Response({
+            'fecha': dia.isoformat(),
+            'sucursal': {'id': sucursal.id, 'nombre': sucursal.nombre} if sucursal else None,
+            'membresias': membresias,
+            'tienda': tienda,
+            'gastos': egresos,
+            'ingresos': cobros,
+            'neto': cobros['total'] - egresos['total'],
+            # Lo que debe haber en el cajón al cerrar, sin contar el fondo de apertura:
+            # solo el efectivo se toca a mano; tarjeta y transferencia no pasan por ahí.
+            'efectivo_esperado': cobros['por_metodo']['efectivo'] - egresos['por_metodo']['efectivo'],
+            'movimientos': movimientos,
+        })
+
+    def _fecha_de_corte(self, request):
+        valor = request.query_params.get('fecha')
+        if not valor:
+            return timezone.localdate()
+        fecha = parse_date(valor)
+        if fecha is None:
+            raise ValidationError({'fecha': 'Usa el formato AAAA-MM-DD.'})
+        return fecha
+
+    @staticmethod
+    def _desglosar(movimientos):
+        """Total y desglose por método. En Python y no con aggregate() porque son tres
+        modelos distintos y un día de caja son decenas de renglones, no millones."""
+        por_metodo = {m: Decimal('0') for m, _ in Pago.METODO_CHOICES}
+        total = Decimal('0')
+        num = 0
+        for mov in movimientos:
+            monto = Decimal(mov['monto'])
+            total += monto
+            num += 1
+            if mov['metodo'] in por_metodo:
+                por_metodo[mov['metodo']] += monto
+        return {'total': total, 'num': num, 'por_metodo': por_metodo}
+
 
 class GastoViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
     serializer_class = GastoSerializer
@@ -521,7 +654,14 @@ class GastoViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         self.validar_escritura(serializer.validated_data.get('sucursal'))
-        serializer.save(gym_id=self.request.user.gym_id, registrado_por=self.request.user)
+        # Sin sucursal el gasto es del negocio y no entra al corte de ninguna caja;
+        # quien está parado en una sucursal lo carga a la suya por defecto.
+        sucursal = self.sucursal_por_defecto(serializer.validated_data.get('sucursal'))
+        serializer.save(
+            gym_id=self.request.user.gym_id,
+            sucursal=sucursal,
+            registrado_por=self.request.user,
+        )
 
     def perform_update(self, serializer):
         # El alta validaba la sucursal y fijaba el gym; la edición no hacía ninguna

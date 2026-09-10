@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import api from '../api/axios'
+import SucursalSelector from '../components/SucursalSelector'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
+import CorteDelDia from '../components/CorteDelDia'
+import { enDias, hoyLocal } from '../lib/fechas'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 const INPUT_STYLE = { backgroundColor: '#0d1117', border: '1px solid #21262d', color: '#fff' }
@@ -16,7 +19,10 @@ const CATEGORIAS_GASTO = [
   ['renta', 'Renta'], ['nomina', 'Nómina'], ['equipo', 'Equipo'],
   ['servicios', 'Servicios'], ['mantenimiento', 'Mantenimiento'], ['marketing', 'Marketing'], ['otro', 'Otro'],
 ]
-const GASTO_EMPTY = { categoria: 'otro', descripcion: '', monto: '', fecha: new Date().toISOString().split('T')[0] }
+const GASTO_EMPTY = {
+  categoria: 'otro', descripcion: '', monto: '', metodo: 'efectivo', sucursal: '',
+  fecha: hoyLocal(),
+}
 
 // Etiqueta de urgencia de una membresía por cobrar. En la lista combinada el
 // "Vence: <fecha>" suelto no distingue al que lleva tres semanas atrasado del que
@@ -52,18 +58,29 @@ export default function Pagos() {
   const [gastoModal, setGastoModal] = useState(false)
   const [gastoForm, setGastoForm] = useState(GASTO_EMPTY)
 
-  const load = () => api.get('/socios/membresias/').then(r => setMembresias(r.data)).catch(() => {})
-  const loadPagos = () => api.get('/socios/pagos/').then(r => setPagos(r.data)).catch(() => {})
-  const loadGastos = () => api.get('/socios/gastos/').then(r => setGastos(r.data)).catch(() => {})
+  const [sucursales, setSucursales] = useState([])
+  // Un unico selector manda en toda la pagina. Tener uno propio en la vista de corte
+  // permitia dejarlos apuntando a sucursales distintas: la lista decia una cosa y el
+  // cierre del dia otra, sin nada en pantalla que explicara la diferencia.
+  const [q, setQ] = useState('')
+  const sucursalCorte = q.replace('?sucursal=', '')
+
+  const load = () => api.get(`/socios/membresias/${q}`).then(r => setMembresias(r.data)).catch(() => {})
+  const loadPagos = () => api.get(`/socios/pagos/${q}`).then(r => setPagos(r.data)).catch(() => {})
+  const loadGastos = () => api.get(`/socios/gastos/${q}`).then(r => setGastos(r.data)).catch(() => {})
 
   useEffect(() => {
     load()
     loadPagos()
     if (isAdmin) loadGastos()
-  }, [isAdmin])
+    api.get('/gyms/sucursales/').then(r => setSucursales(r.data)).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, q])
 
-  const hoy = new Date().toISOString().split('T')[0]
-  const semana = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]
+  // Con `toISOString()` a secas, a partir de las 18:00 en México "hoy" era mañana:
+  // la membresía que vence hoy salía como "Atrasado 1 día" cada tarde-noche.
+  const hoy = hoyLocal()
+  const semana = enDias(7)
 
   const pendientes = membresias.filter(m => m.estado !== 'activa' || m.fecha_fin <= semana)
   const pendHoy    = pendientes.filter(m => m.fecha_fin === hoy || m.estado === 'pendiente_pago')
@@ -109,7 +126,10 @@ export default function Pagos() {
   const guardarGasto = async e => {
     e.preventDefault()
     try {
-      await api.post('/socios/gastos/', gastoForm)
+      await api.post('/socios/gastos/', {
+        ...gastoForm,
+        sucursal: gastoForm.sucursal ? Number(gastoForm.sucursal) : null,
+      })
       toast.success('Gasto registrado')
       setGastoModal(false)
       setGastoForm(GASTO_EMPTY)
@@ -135,7 +155,7 @@ export default function Pagos() {
     .filter(m => m.estado === 'activa')
     .reduce((sum, m) => sum + Number(m.plan_precio || 0), 0)
 
-  const inicioSemana = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
+  const inicioSemana = enDias(-7)
   const pagosHoy = pagos.filter(p => p.fecha?.startsWith(hoy))
   const pagosSemana = pagos.filter(p => p.fecha?.split('T')[0] >= inicioSemana)
   const listaRegistro = (regTab === 'hoy' ? pagosHoy : pagosSemana)
@@ -147,13 +167,17 @@ export default function Pagos() {
 
   const VISTAS = [
     ['pendientes', 'Por cobrar'],
+    ['corte', 'Corte del día'],
     ['registro', 'Registro de pagos'],
     ...(isAdmin ? [['gastos', 'Gastos']] : []),
   ]
 
   return (
     <div className="space-y-5">
-      <h2 className="text-xl font-black text-white uppercase tracking-wide">PAGOS</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-xl font-black text-white uppercase tracking-wide">PAGOS</h2>
+        <SucursalSelector onChange={setQ} />
+      </div>
 
       {/* Stat cards — el total cobrado solo lo ve el admin */}
       <div className={`grid grid-cols-2 gap-4 ${isAdmin ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
@@ -257,6 +281,12 @@ export default function Pagos() {
         </>
       )}
 
+      {/* El corte junta cobros de membresía, ventas de tienda y gastos: el cajón
+          es uno solo aunque el sistema los capture en dos módulos distintos. */}
+      {vista === 'corte' && (
+        <CorteDelDia sucursal={sucursalCorte} sucursales={sucursales} />
+      )}
+
       {vista === 'registro' && (
         <>
           <div className="flex gap-1 flex-wrap">
@@ -345,7 +375,7 @@ export default function Pagos() {
               <table className="w-full text-sm min-w-[560px]">
                 <thead style={{ borderBottom: '1px solid #21262d' }}>
                   <tr>
-                    {['CATEGORÍA', 'DESCRIPCIÓN', 'MONTO', 'FECHA'].map(h => (
+                    {['CATEGORÍA', 'DESCRIPCIÓN', 'MONTO', 'MÉTODO', 'SUCURSAL', 'FECHA'].map(h => (
                       <th key={h} className="px-4 py-3 text-left text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>{h}</th>
                     ))}
                   </tr>
@@ -356,11 +386,15 @@ export default function Pagos() {
                       <td className="px-4 py-3 text-xs capitalize" style={{ color: '#fff' }}>{g.categoria}</td>
                       <td className="px-4 py-3 text-xs" style={{ color: '#8b949e' }}>{g.descripcion}</td>
                       <td className="px-4 py-3 text-sm font-bold" style={{ color: '#ef4444' }}>${Number(g.monto).toLocaleString()}</td>
+                      <td className="px-4 py-3 text-xs capitalize" style={{ color: '#8b949e' }}>{METODO_LABEL[g.metodo] || g.metodo}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: g.sucursal ? '#8b949e' : '#3d444d' }}>
+                        {g.sucursal_nombre || 'Todo el negocio'}
+                      </td>
                       <td className="px-4 py-3 text-xs" style={{ color: '#8b949e' }}>{g.fecha}</td>
                     </tr>
                   ))}
                   {gastos.length === 0 && (
-                    <tr><td colSpan={4} className="px-4 py-10 text-center text-xs" style={{ color: '#3d444d' }}>Sin gastos registrados</td></tr>
+                    <tr><td colSpan={6} className="px-4 py-10 text-center text-xs" style={{ color: '#3d444d' }}>Sin gastos registrados</td></tr>
                   )}
                 </tbody>
               </table>
@@ -454,6 +488,26 @@ export default function Pagos() {
                   <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>FECHA</label>
                   <input required type="date" value={gastoForm.fecha} onChange={e => setGastoForm(f => ({ ...f, fecha: e.target.value }))}
                     className="w-full rounded-lg px-3 py-2 text-sm mt-1 outline-none text-white" style={INPUT_STYLE} />
+                </div>
+                {/* Con qué se pagó decide si el gasto baja el efectivo del cajón: la
+                    renta por transferencia no sale de la caja. */}
+                <div>
+                  <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>MÉTODO</label>
+                  <select value={gastoForm.metodo} onChange={e => setGastoForm(f => ({ ...f, metodo: e.target.value }))}
+                    className="w-full rounded-lg px-3 py-2 text-sm mt-1 outline-none text-white" style={INPUT_STYLE}>
+                    {Object.entries(METODO_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                </div>
+                {/* Y de qué caja salió: un gasto sin sucursal es del negocio y no entra
+                    al corte de ninguna, que es justo lo que hacía que los cortes de
+                    sucursal salieran siempre sin gastos. */}
+                <div>
+                  <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>SALIÓ DE</label>
+                  <select value={gastoForm.sucursal} onChange={e => setGastoForm(f => ({ ...f, sucursal: e.target.value }))}
+                    className="w-full rounded-lg px-3 py-2 text-sm mt-1 outline-none text-white" style={INPUT_STYLE}>
+                    <option value="">Todo el negocio (fuera del corte)</option>
+                    {sucursales.map(s => <option key={s.id} value={s.id}>Caja de {s.nombre}</option>)}
+                  </select>
                 </div>
               </div>
               <div className="flex gap-3 pt-2">

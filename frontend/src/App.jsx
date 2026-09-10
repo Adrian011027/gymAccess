@@ -3,10 +3,10 @@ import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/layout/Layout'
 import Login from './pages/Login'
-import AvisoPrivacidad from './pages/AvisoPrivacidad'
 import SaasLogin from './pages/SaasLogin'
 import CheckIn from './pages/CheckIn'
 import Dashboard from './pages/Dashboard'
+import Afluencia from './pages/Afluencia'
 import Socios from './pages/Socios'
 import Clases from './pages/Clases'
 import Equipamiento from './pages/Equipamiento'
@@ -49,7 +49,6 @@ export default function App() {
         />
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route path="/aviso/:token" element={<AvisoPrivacidad />} />
           <Route path="/saas/login" element={<SaasLogin />} />
           <Route path="/seleccionar-sucursal" element={<SeleccionarSucursal />} />
           <Route path="/saas" element={<SaasLayout />}>
@@ -64,6 +63,9 @@ export default function App() {
             <Route path="/pagos"        element={<Pagos />} />
             <Route path="/pos"          element={<POS />} />
             <Route path="/notificaciones" element={<Notificaciones />} />
+            {/* Fuera de AdminRoutes a proposito: la afluencia la necesita quien esta
+                en el piso. El Dashboard sigue cerrado porque ahi van los ingresos. */}
+            <Route path="/afluencia"    element={<Afluencia />} />
             <Route element={<AdminRoutes />}>
               <Route path="/dashboard"    element={<Dashboard />} />
               <Route path="/equipamiento" element={<Equipamiento />} />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import api from '../api/axios'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
+import CorteDelDia from '../components/CorteDelDia'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
 const INPUT_STYLE = { backgroundColor: '#0d1117', border: '1px solid #21262d', color: '#fff' }
@@ -193,7 +194,7 @@ export default function POS() {
               {sucursales.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
             </select>
           )}
-          {['caja', 'inventario', 'ventas'].map(t => (
+          {['caja', 'corte', 'inventario', 'ventas'].map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -353,6 +354,13 @@ export default function POS() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ---------------- CORTE ---------------- */}
+      {/* La caja cobra membresías y productos por separado; el cierre del día es uno
+          solo. Sin esta pestaña, recepción termina el turno sin saber cuánto hizo. */}
+      {tab === 'corte' && (
+        <CorteDelDia sucursal={contexto} sucursales={sucursales} />
       )}
 
       {/* ---------------- INVENTARIO ---------------- */}

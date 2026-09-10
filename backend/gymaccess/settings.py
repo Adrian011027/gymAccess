@@ -151,6 +151,11 @@ REST_FRAMEWORK = {
         # Verifica contraseñas de admin: se mantiene bajo a propósito para que no sirva
         # como banco de pruebas de fuerza bruta.
         'autorizacion': '5/min',
+        # Imagen del QR: pública (la abre el socio desde WhatsApp, sin sesión). El
+        # token tiene 96 bits de azar, así que no se adivina; el límite está para que
+        # el endpoint no sirva como banco de pruebas ni para tirar el servidor
+        # pidiendo miles de PNG.
+        'qr_publico': '20/min',
     },
 }
 
@@ -210,6 +215,13 @@ if 'test' in sys.argv:
 # reescriba (nginx, Cloudflare). Sin esto, el cliente elige qué IP queda en la
 # evidencia de consentimiento y en la bitácora de soporte. Ver legal/views.py:ip_de.
 USAR_X_FORWARDED_FOR = _env_bool('DJANGO_TRAS_PROXY', False)
+
+# Dominio con el que se arman los enlaces del QR que se mandan al socio por chat.
+# Vacío = se usa el host de la petición, que es lo correcto detrás de nginx. Se fija
+# cuando recepción entra por una dirección que el teléfono del socio no alcanza
+# (localhost en desarrollo, la IP privada del gym), porque el enlace lo genera la
+# petición de recepción pero lo abre el socio desde fuera. Ver accesos/enlaces.py.
+QR_BASE_URL = os.environ.get('QR_BASE_URL', '').rstrip('/')
 
 # --- Endurecimiento para producción -------------------------------------------
 # Detrás de nginx/Cloudflare Django ve http en REMOTE_ADDR y sin esta cabecera

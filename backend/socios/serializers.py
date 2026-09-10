@@ -1,3 +1,4 @@
+from accesos.enlaces import url_qr
 from rest_framework import serializers
 from .models import AjusteMembresia, Plan, PrecioPlanSucursal, Socio, Membresia, Pago, Gasto
 
@@ -55,6 +56,8 @@ class SocioSerializer(serializers.ModelSerializer):
     membresia_activa = serializers.SerializerMethodField()
     membresia_reciente = serializers.SerializerMethodField()
     codigo_acceso = serializers.SerializerMethodField()
+    qr_imagen_url = serializers.SerializerMethodField()
+    qr_pagina_url = serializers.SerializerMethodField()
     sucursal_nombre = serializers.CharField(source='sucursal.nombre', read_only=True)
     edad = serializers.SerializerMethodField()
     es_menor = serializers.SerializerMethodField()
@@ -144,6 +147,32 @@ class SocioSerializer(serializers.ModelSerializer):
     def get_codigo_acceso(self, obj):
         m = next((m for m in obj.metodos_acceso.all() if m.activo), None)
         return m.token if m else None
+
+    def get_qr_imagen_url(self, obj):
+        """URL pública del PNG del QR, para poder mandarla por chat.
+
+        La arma el servidor y no el frontend porque solo aquí se sabe el dominio real
+        detrás del proxy; construirla en el navegador daría un enlace a `localhost`
+        que en el teléfono del socio no abre nada.
+        """
+        m = next((m for m in obj.metodos_acceso.all() if m.activo and m.tipo == 'qr'), None)
+        request = self.context.get('request')
+        if not m or request is None:
+            return None
+        return url_qr(request, m.token, 'qr-imagen')
+
+    def get_qr_pagina_url(self, obj):
+        """La página que ve el socio al pulsar el enlace del chat.
+
+        Es esta y no el `.png` la que se comparte: varios navegadores móviles descargan
+        una URL de imagen en vez de mostrarla, y el socio termina con un archivo en vez
+        de un código en pantalla.
+        """
+        m = next((m for m in obj.metodos_acceso.all() if m.activo and m.tipo == 'qr'), None)
+        request = self.context.get('request')
+        if not m or request is None:
+            return None
+        return url_qr(request, m.token)
 
     def get_membresia_activa(self, obj):
         # Misma definición de "vigente" que usa el check-in (Membresia.objects.vigentes).

@@ -1,3 +1,4 @@
+from django.db import models
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -33,7 +34,27 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             qs = Usuario.objects.all()
         if user.rol == 'superadmin':
             return qs
-        return qs.filter(gym_id=user.gym_id)
+        qs = qs.filter(gym_id=user.gym_id)
+
+        # `?sucursal=<id>` para que el dueño mire la plantilla de un local concreto.
+        # Va a mano y no con SucursalScopedMixin porque un empleado se filtra por las
+        # sucursales donde PUEDE trabajar, no solo por la activa de su sesión: con
+        # `sucursal_id` a secas, quien rota entre locales desaparecía del listado de
+        # los demás según dónde hubiera entrado esa mañana.
+        #
+        # Al admin, que no tiene sucursal, no se le esconde: es de todas.
+        sucursal = self.request.query_params.get('sucursal')
+        if sucursal:
+            try:
+                sucursal_id = int(sucursal)
+            except (TypeError, ValueError):
+                raise ValidationError({'sucursal': 'Sucursal inválida.'})
+            qs = qs.filter(
+                models.Q(sucursal_id=sucursal_id)
+                | models.Q(sucursales_permitidas__id=sucursal_id)
+                | models.Q(rol__in=ROLES_ADMIN)
+            ).distinct()
+        return qs
 
     def perform_create(self, serializer):
         if self.request.user.rol != 'superadmin':

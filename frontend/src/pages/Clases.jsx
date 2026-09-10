@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import api from '../api/axios'
+import SucursalSelector from '../components/SucursalSelector'
 import toast from 'react-hot-toast'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
@@ -28,8 +29,9 @@ export default function Clases() {
   const [loading, setLoading] = useState(false)
   const [tipoFiltro, setTipoFiltro] = useState('todos')
 
-  const load = () => api.get('/gyms/clases/').then(r => setClases(r.data)).catch(() => {})
-  useEffect(() => { load() }, [])
+  const load = () => api.get(`/gyms/clases/${q}`).then(r => setClases(r.data)).catch(() => {})
+  const [q, setQ] = useState('')
+  useEffect(() => { load() }, [q])
 
   const save = async e => {
     e.preventDefault()
@@ -72,6 +74,7 @@ export default function Clases() {
           <h2 className="text-xl font-black text-white uppercase tracking-wide">CLASES</h2>
           <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>{clases.length} clases programadas</p>
         </div>
+        <SucursalSelector onChange={setQ} />
         <button
           onClick={() => { setForm(EMPTY); setModal(true) }}
           className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all"

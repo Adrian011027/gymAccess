@@ -1,17 +1,26 @@
+import io
 from datetime import timedelta
 
-from django.db import models
+import qrcode
+from django.db import models, transaction
 from django.db.models import Count
 from django.db.models.functions import ExtractHour
+from django.http import HttpResponse, HttpResponseRedirect
+from django.urls import reverse
+from django.utils.html import escape
 from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_control
 from rest_framework import viewsets, permissions, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from .enlaces import url_qr
 from .models import Acceso, MetodoAcceso, generar_token_qr
-from .serializers import AccesoSerializer, MetodoAccesoSerializer
+from .serializers import AccesoSerializer, MetodoAccesoSerializer, VisitaSerializer
 from gyms.models import Sucursal
-from socios.models import Membresia, Socio
+from socios.models import Membresia, Pago, Socio, siguiente_numero_socio
 from notificaciones.models import Notificacion
 from usuarios.models import Usuario
 from usuarios.permissions import ROLES_ADMIN
@@ -98,7 +107,7 @@ class AsignarQRView(APIView):
 
         metodo = socio.metodos_acceso.filter(tipo='qr', activo=True).first()
         if metodo:
-            return Response(MetodoAccesoSerializer(metodo).data, status=status.HTTP_200_OK)
+            return Response(MetodoAccesoSerializer(metodo, context={'request': request}).data, status=status.HTTP_200_OK)
 
         # El token es único a nivel tabla: se reintenta ante una colisión del azar en
         # vez de devolver un 500 por IntegrityError.
@@ -107,7 +116,7 @@ class AsignarQRView(APIView):
             if not MetodoAcceso.objects.filter(token=token).exists():
                 metodo = MetodoAcceso.objects.create(socio=socio, tipo='qr', token=token)
                 return Response(
-                    MetodoAccesoSerializer(metodo).data, status=status.HTTP_201_CREATED,
+                    MetodoAccesoSerializer(metodo, context={'request': request}).data, status=status.HTTP_201_CREATED,
                 )
         return Response(
             {'error': 'No se pudo generar un código único, intenta de nuevo.'},
@@ -146,7 +155,7 @@ class SincronizarHuellaView(APIView):
             socio=socio, tipo='huella',
             defaults={'token': template, 'activo': True},
         )
-        return Response(MetodoAccesoSerializer(metodo).data, status=status.HTTP_200_OK)
+        return Response(MetodoAccesoSerializer(metodo, context={'request': request}).data, status=status.HTTP_200_OK)
 
 
 class AccesoViewSet(SucursalScopedMixin, viewsets.ReadOnlyModelViewSet):
@@ -187,12 +196,18 @@ class BuscarSocioView(APIView):
             gym_id=request.user.gym_id, activo=True,
         ).select_related('sucursal').prefetch_related('metodos_acceso')
 
-        # Se busca sobre "nombre apellido" completo para que "juan perez" encuentre a
-        # Juan Pérez; palabra por palabra, porque nadie escribe el orden exacto.
-        for palabra in termino.split():
-            qs = qs.filter(
-                models.Q(nombre__icontains=palabra) | models.Q(apellido__icontains=palabra)
-            )
+        # Un código corto no es un nombre: "1001" no aparece en ningún apellido, así
+        # que la búsqueda por palabras lo devolvía vacío y recepción concluía que el
+        # socio no existía.
+        if termino.isdigit() and len(termino) <= CheckInView.MAX_DIGITOS_NUMERO:
+            qs = qs.filter(numero_socio=int(termino))
+        else:
+            # Se busca sobre "nombre apellido" completo para que "juan perez" encuentre
+            # a Juan Pérez; palabra por palabra, porque nadie escribe el orden exacto.
+            for palabra in termino.split():
+                qs = qs.filter(
+                    models.Q(nombre__icontains=palabra) | models.Q(apellido__icontains=palabra)
+                )
 
         resultados = []
         for socio in qs.order_by('nombre', 'apellido')[:15]:
@@ -203,6 +218,7 @@ class BuscarSocioView(APIView):
             resultados.append({
                 'id': socio.id,
                 'nombre': f'{socio.nombre} {socio.apellido}',
+                'numero_socio': socio.numero_socio,
                 'token': metodo.token if metodo else None,
                 'sucursal': socio.sucursal.nombre if socio.sucursal_id else None,
                 'sucursal_id': socio.sucursal_id,
@@ -220,16 +236,20 @@ class CheckInView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'checkin'
 
+    # Tope del código corto. `numero_socio` es un PositiveIntegerField y un entero de
+    # 30 cifras revienta la consulta en Postgres antes de llegar a comparar nada.
+    MAX_DIGITOS_NUMERO = 9
+
     def post(self, request):
-        token = request.data.get('token')
+        codigo = str(request.data.get('token') or '').strip()
         sucursal_id = request.data.get('sucursal_id')
 
-        try:
-            metodo = MetodoAcceso.objects.select_related('socio').get(
-                token=token, activo=True, socio__gym_id=request.user.gym_id,
+        identificado = self.identificar(codigo, request.user.gym_id)
+        if identificado is None:
+            return Response(
+                {'error': 'Código no reconocido'}, status=status.HTTP_404_NOT_FOUND,
             )
-        except MetodoAcceso.DoesNotExist:
-            return Response({'error': 'Token inválido'}, status=status.HTTP_404_NOT_FOUND)
+        socio, metodo_usado = identificado
 
         # La sucursal viene del cliente: hay que comprobar que exista y que sea de este
         # gym antes de registrar nada. Sin esta validación el acceso se guardaba contra
@@ -255,8 +275,6 @@ class CheckInView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        socio = metodo.socio
-
         # Un socio dado de baja no entra, tenga la membresía que tenga.
         #
         # Esta comprobación no existía: el check-in miraba la vigencia de la
@@ -274,7 +292,7 @@ class CheckInView(APIView):
             Acceso.objects.create(
                 socio=socio,
                 sucursal=sucursal,
-                metodo_usado=metodo.tipo,
+                metodo_usado=metodo_usado,
                 resultado='denegado',
                 motivo_denegado='suspendido',
             )
@@ -292,7 +310,7 @@ class CheckInView(APIView):
             Acceso.objects.create(
                 socio=socio,
                 sucursal=sucursal,
-                metodo_usado=metodo.tipo,
+                metodo_usado=metodo_usado,
                 resultado='denegado',
                 motivo_denegado=motivo,
             )
@@ -322,7 +340,7 @@ class CheckInView(APIView):
                 socio=socio,
                 sucursal=sucursal,
                 membresia=membresia,
-                metodo_usado=metodo.tipo,
+                metodo_usado=metodo_usado,
                 resultado='denegado',
                 motivo_denegado='ya_registrado',
             )
@@ -362,7 +380,7 @@ class CheckInView(APIView):
                         socio=socio,
                         sucursal=sucursal,
                         membresia=membresia,
-                        metodo_usado=metodo.tipo,
+                        metodo_usado=metodo_usado,
                         resultado='denegado',
                         motivo_denegado='otra_sucursal',
                     )
@@ -379,7 +397,7 @@ class CheckInView(APIView):
             socio=socio,
             sucursal=sucursal,
             membresia=membresia,
-            metodo_usado=metodo.tipo,
+            metodo_usado=metodo_usado,
             resultado='permitido',
             autorizado_por=autorizador,
         )
@@ -394,6 +412,43 @@ class CheckInView(APIView):
             'sucursal_socio': socio.sucursal.nombre if socio.sucursal_id else None,
             'autorizado_por': autorizador.nombre if autorizador else None,
         })
+
+    def identificar(self, codigo, gym_id):
+        """Resuelve lo que llegó por el lector a (socio, cómo se identificó).
+
+        Acepta dos cosas por el mismo campo: el token del QR y el número de socio
+        corto (1001, 1002…). El corto existe para el que llega sin teléfono y sin
+        credencial, que hasta ahora dejaba a recepción sin forma de registrarle la
+        entrada desde el kiosco.
+
+        Que el consecutivo abra la puerta no contradice el motivo por el que el token
+        del QR lleva parte aleatoria: ese lo trae el socio y viaja por WhatsApp, así
+        que tiene que ser inadivinable. El corto solo lo puede teclear personal ya
+        autenticado en el mostrador, y la respuesta devuelve el nombre, de modo que un
+        1002 por un 1001 se ve en la pantalla antes de que nadie cruce la puerta.
+
+        Devuelve None si no corresponde a nadie de este gym.
+        """
+        if not codigo:
+            return None
+
+        metodo = MetodoAcceso.objects.select_related('socio').filter(
+            token=codigo, activo=True, socio__gym_id=gym_id,
+        ).first()
+        if metodo:
+            return metodo.socio, metodo.tipo
+
+        if codigo.isdigit() and len(codigo) <= self.MAX_DIGITOS_NUMERO:
+            socio = Socio.objects.vivos().filter(
+                gym_id=gym_id, numero_socio=int(codigo),
+            ).first()
+            if socio:
+                # 'manual' y no 'qr': la entrada se tecleó. Marcarla como escaneo
+                # falsearía la única señal que dice cuántos socios llegan de verdad
+                # con su código y cuántos hay que buscar a mano en el mostrador.
+                return socio, 'manual'
+
+        return None
 
 
 class StatsView(SucursalScopedMixin, APIView):
@@ -459,3 +514,364 @@ class StatsView(SucursalScopedMixin, APIView):
             'accesos_hoy': accesos_hoy,
             'accesos_mes': accesos_mes,
         })
+
+
+def _markdown_a_html(texto):
+    """Conversión mínima de Markdown a HTML para la página pública del aviso.
+
+    Cubre justo lo que traen los documentos legales —encabezados, listas, negritas y
+    párrafos— porque es lo único que aparece en `legal/aviso-privacidad.md`. No hay
+    librería de Markdown en las dependencias del backend y traer una para esto sería
+    una dependencia entera a cambio de cuatro reglas.
+    """
+    import re
+
+    def inline(s):
+        s = escape(s)
+        return re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', s)
+
+    bloques = []
+    lista = []
+    parrafo = []
+
+    def cerrar_lista():
+        if lista:
+            bloques.append('<ul>' + ''.join(f'<li>{inline(it)}</li>' for it in lista) + '</ul>')
+            lista.clear()
+
+    def cerrar_parrafo():
+        if parrafo:
+            bloques.append(f'<p>{inline(" ".join(parrafo))}</p>')
+            parrafo.clear()
+
+    # Igual que el equivalente en JS (components/Markdown.jsx): las líneas seguidas
+    # sin línea en blanco entre ellas son un solo párrafo, así que se juntan ANTES de
+    # aplicar `inline`. Procesarlas una a una rompía una negrita que el borrador
+    # partía en dos líneas: **no rastrea a los\nsocios...similares** llegaba a la
+    # página como dos asteriscos sueltos en vez de texto en negrita.
+    for linea in texto.split('\n'):
+        cruda = linea.strip()
+        if not cruda:
+            cerrar_lista()
+            cerrar_parrafo()
+            continue
+        if cruda.startswith('#'):
+            cerrar_lista()
+            cerrar_parrafo()
+            nivel = min(len(cruda) - len(cruda.lstrip('#')), 4)
+            bloques.append(f'<h{nivel + 1}>{inline(cruda.lstrip("#").strip())}</h{nivel + 1}>')
+            continue
+        if cruda.startswith('- '):
+            cerrar_parrafo()
+            lista.append(cruda[2:])
+            continue
+        if cruda.startswith('---'):
+            cerrar_lista()
+            cerrar_parrafo()
+            bloques.append('<hr>')
+            continue
+        cerrar_lista()
+        parrafo.append(cruda)
+    cerrar_lista()
+    cerrar_parrafo()
+    return ''.join(bloques)
+
+
+def _pagina_aviso(gym, aviso):
+    """Aviso de privacidad + botón de aceptar, antes de entregar el QR.
+
+    Sin JavaScript: es un formulario que hace POST a esta misma URL. Funciona igual
+    en el navegador más viejo que abra el enlace desde WhatsApp.
+    """
+    contenido = _markdown_a_html(aviso.contenido)
+    titulo = escape(aviso.titulo)
+    version = escape(aviso.version)
+    return f"""<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aviso de privacidad · {gym}</title>
+<style>
+  h2 {{ font-size:16px; margin:20px 0 8px }}
+  h3 {{ font-size:14px; margin:16px 0 6px }}
+  p, li {{ font-size:13px; line-height:1.6; color:#c9d1d9 }}
+  ul {{ padding-left:20px; margin:6px 0 }}
+  strong {{ color:#fff }}
+  hr {{ border:none; border-top:1px solid #21262d; margin:20px 0 }}
+</style>
+</head>
+<body style="margin:0;background:#0d1117;color:#fff;font-family:system-ui,-apple-system,sans-serif;
+             min-height:100vh;padding:24px;box-sizing:border-box">
+  <div style="max-width:480px;margin:0 auto">
+    <p style="font-size:12px;letter-spacing:.18em;color:#8b949e;margin:0 0 4px">{gym}</p>
+    <h1 style="font-size:18px;font-weight:800;margin:0 0 4px">{titulo}</h1>
+    <p style="font-size:11px;color:#8b949e;margin:0 0 16px">Versión {version}</p>
+    <div style="background:#161b22;border:1px solid #21262d;border-radius:16px;padding:16px;
+                max-height:55vh;overflow-y:auto">
+      {contenido}
+    </div>
+    <form method="POST" style="margin-top:16px">
+      <button type="submit" style="width:100%;padding:14px;border:none;border-radius:12px;
+              background:#22c55e;color:#0d1117;font-weight:800;font-size:14px;cursor:pointer">
+        Acepto el aviso de privacidad
+      </button>
+    </form>
+    <p style="font-size:11px;color:#8b949e;text-align:center;margin-top:12px">
+      Al aceptar verás tu código QR de acceso.
+    </p>
+  </div>
+</body></html>"""
+
+
+class QRImagenView(APIView):
+    """El QR de un socio como PNG, en una URL que se puede abrir sin sesión.
+
+    Existe porque un enlace de WhatsApp (`wa.me`, `web.whatsapp.com/send`) solo acepta
+    teléfono y texto: no hay forma de adjuntar una imagen desde la URL. Con esto el
+    mensaje lleva un enlace que WhatsApp previsualiza, y el socio abre o guarda su
+    código de una pulsación, sin que recepción tenga que pegar nada.
+
+    **Es pública a propósito**, y eso merece explicación: el socio no tiene cuenta en
+    el sistema, así que no hay sesión con la que autenticar la petición. Lo que la hace
+    aceptable es que la URL lleva el token, y el token es el secreto: quien la tiene ya
+    tiene la credencial, así que el enlace no expone nada que la imagen no expusiera.
+    Los 96 bits de `secrets.token_urlsafe(12)` son los que impiden llegar aquí
+    probando; el throttle está para que tampoco se pueda intentar en volumen.
+
+    No se guarda ningún PNG en disco: se dibuja al vuelo. Un directorio de imágenes por
+    socio se queda desincronizado en cuanto se reasigna un QR —el archivo viejo sigue
+    ahí, y sigue abriendo la puerta— y obliga a respaldar y a montar un volumen para
+    algo que se regenera en milisegundos.
+    """
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'qr_publico'
+
+    @method_decorator(cache_control(max_age=3600, private=True))
+    def get(self, request, token):
+        metodo = MetodoAcceso.objects.select_related('socio').filter(
+            token=token, tipo='qr', activo=True,
+        ).first()
+        # Un QR revocado, o de un socio dado de baja o borrado, deja de servirse: si
+        # no, el enlace sigue entregando una credencial que ya no vale y el socio se
+        # presenta en la puerta con ella.
+        if (
+            metodo is None
+            or metodo.socio.eliminado_en is not None
+            or not metodo.socio.activo
+        ):
+            return HttpResponse(status=404)
+
+        # box_size 20 deja el código sobre los 550 px. WhatsApp recomprime lo que pasa
+        # por el chat, y un PNG de 350 px llega con los módulos lavados justo cuando el
+        # socio lo enseña en la puerta desde la pantalla del teléfono.
+        imagen = qrcode.make(token, box_size=20, border=4)
+        buffer = io.BytesIO()
+        imagen.save(buffer, format='PNG')
+        # Sin nombre ni datos del socio en la respuesta: quien abra el enlace ve un
+        # código, no a quién pertenece.
+        return HttpResponse(buffer.getvalue(), content_type='image/png')
+
+
+class QRPaginaView(APIView):
+    """La página que abre el socio desde el chat: su código QR, a pantalla completa.
+
+    El enlace del mensaje apunta aquí y no al `.png` directo por dos razones. Una, que
+    varios navegadores móviles descargan una URL de imagen en vez de mostrarla, y el
+    socio acaba con un archivo en la carpeta de descargas en vez de un código que
+    enseñar en la puerta. Y dos, que WhatsApp previsualiza los enlaces leyendo las
+    etiquetas Open Graph: con `og:image` apuntando al PNG, la miniatura del QR se ve
+    en el chat sin que nadie abra nada.
+
+    Deliberadamente NO lleva el nombre del socio ni ningún dato suyo: el enlace se
+    reenvía con un toque, y lo único que debe viajar es el código. El nombre del
+    gimnasio sí, porque orienta al socio y no es un dato personal de él.
+    """
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'qr_publico'
+
+    def _metodo_vivo(self, token):
+        metodo = MetodoAcceso.objects.select_related('socio__gym').filter(
+            token=token, tipo='qr', activo=True,
+        ).first()
+        if (
+            metodo is None
+            or metodo.socio.eliminado_en is not None
+            or not metodo.socio.activo
+        ):
+            return None
+        return metodo
+
+    def _aviso_pendiente(self, socio):
+        """El aviso vigente del gym, si el socio (o su tutor) todavía no lo aceptó.
+
+        None si ya lo aceptó o si el gym no ha publicado ninguno: en ambos casos no
+        hay nada que bloquee la entrega del QR.
+        """
+        from legal.models import ConsentimientoSocio, DocumentoLegal
+        aviso = DocumentoLegal.vigente(DocumentoLegal.AVISO_PRIVACIDAD, socio.gym_id)
+        if not aviso:
+            return None
+        if ConsentimientoSocio.objects.filter(socio=socio, documento=aviso).exists():
+            return None
+        return aviso
+
+    def get(self, request, token):
+        metodo = self._metodo_vivo(token)
+        if metodo is None:
+            return HttpResponse(
+                '<!doctype html><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                '<body style="font-family:system-ui;text-align:center;padding:48px 24px">'
+                '<h1 style="font-size:18px">Este código ya no está disponible</h1>'
+                '<p style="color:#666;font-size:14px">Pídele uno nuevo a recepción.</p>',
+                status=404, content_type='text/html; charset=utf-8',
+            )
+
+        gym = escape(metodo.socio.gym.nombre if metodo.socio.gym_id else 'tu gimnasio')
+
+        # El QR es la credencial que abre la puerta: antes de mostrarlo se exige
+        # aceptar el aviso de privacidad vigente, igual que se exigiría en mostrador.
+        # Sin este freno, un socio dado de alta sin marcar la casilla recibía su QR
+        # por WhatsApp sin haber aceptado nunca nada.
+        aviso = self._aviso_pendiente(metodo.socio)
+        if aviso is not None:
+            return HttpResponse(_pagina_aviso(gym, aviso), content_type='text/html; charset=utf-8')
+
+        png = url_qr(request, metodo.token, 'qr-imagen')
+        return HttpResponse(f"""<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tu código de acceso</title>
+<meta property="og:title" content="Tu código de acceso · {gym}">
+<meta property="og:description" content="Muéstralo en la entrada para registrar tu acceso.">
+<meta property="og:image" content="{png}">
+<meta property="og:type" content="website">
+</head>
+<body style="margin:0;background:#0d1117;color:#fff;font-family:system-ui,-apple-system,sans-serif;
+             min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">
+  <div style="text-align:center;max-width:420px;width:100%">
+    <p style="font-size:12px;letter-spacing:.18em;color:#8b949e;margin:0 0 4px">{gym}</p>
+    <h1 style="font-size:18px;font-weight:800;margin:0 0 20px">Tu código de acceso</h1>
+    <!-- Fondo blanco propio: el QR sobre el fondo oscuro no lo lee ningún escáner. -->
+    <div style="background:#fff;padding:16px;border-radius:16px;display:inline-block;width:100%;
+                box-sizing:border-box">
+      <img src="{png}" alt="Código QR de acceso"
+           style="width:100%;height:auto;display:block;image-rendering:pixelated">
+    </div>
+    <p style="font-size:13px;color:#8b949e;line-height:1.5;margin:20px 0 0">
+      Muéstralo en la entrada para registrar tu acceso.<br>
+      Mantén pulsada la imagen para guardarla en tu teléfono.
+    </p>
+  </div>
+</body></html>""", content_type='text/html; charset=utf-8')
+
+    def post(self, request, token):
+        """Registra la aceptación del aviso y, hecho eso, entrega el QR.
+
+        Sin sesión ni CSRF de por medio a propósito, igual que el GET: el token en la
+        URL es la única credencial que hay, y ya es la misma que abre la puerta.
+        """
+        metodo = self._metodo_vivo(token)
+        if metodo is None:
+            return HttpResponse(status=404)
+
+        from legal.models import ConsentimientoSocio, DocumentoLegal
+        from legal.views import ip_de
+
+        socio = metodo.socio
+        aviso = DocumentoLegal.vigente(DocumentoLegal.AVISO_PRIVACIDAD, socio.gym_id)
+        if aviso is not None:
+            ConsentimientoSocio.objects.get_or_create(
+                socio=socio, documento=aviso,
+                defaults={
+                    'otorgado_por': 'tutor' if socio.es_menor else 'socio',
+                    'medio': 'digital',
+                    'tutor_nombre': socio.tutor_nombre,
+                    'tutor_parentesco': socio.tutor_parentesco,
+                    'ip': ip_de(request),
+                },
+            )
+        # 303 y no un simple render: evita que un F5 del socio reenvíe el POST y
+        # duplique el intento de crear el consentimiento (get_or_create lo tolera,
+        # pero la URL de la barra de direcciones debe volver a ser la del GET).
+        return HttpResponseRedirect(reverse('qr-pagina', kwargs={'token': token}))
+
+
+class RegistrarVisitaView(APIView):
+    """Da de alta al visitante de mostrador: cobra, lo deja entrar y lo registra.
+
+    El que llega de la calle, paga el día y entra no existía en el sistema: recepción
+    cobraba a mano y le abría la puerta, así que ese dinero no salía en el corte y esa
+    persona no salía en la afluencia. Justo las dos cosas que el negocio mira al
+    cerrar.
+
+    Se crea como Socio marcado `es_visita`, y no como entidad aparte, por el dinero:
+    `Pago` cuelga de una membresía y el corte de caja suma pagos de membresía. Con un
+    modelo de visita independiente el cobro del día quedaría fuera del cierre —el
+    agujero que el corte vino a tapar— o habría que sumarlo en dos sitios. De paso, el
+    visitante que vuelve y se inscribe conserva su historial: se le quita la marca.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'checkin'
+
+    def post(self, request):
+        entrada = VisitaSerializer(data=request.data, context={'request': request})
+        entrada.is_valid(raise_exception=True)
+        v = entrada.validated_data
+        sucursal, plan = v['sucursal'], v['plan']
+
+        # Recepción cobra en su puerta. Igual que en la venta de tienda: sin esto, un
+        # POST con la sucursal de al lado mete la visita y su cobro en el corte ajeno.
+        propia = getattr(request.user, 'sucursal_id', None)
+        if propia is not None and sucursal.id != propia:
+            raise ValidationError(
+                {'sucursal': 'Solo puedes registrar visitas en tu sucursal.'}
+            )
+
+        hoy = timezone.localdate()
+        with transaction.atomic():
+            socio = Socio.objects.create(
+                gym_id=request.user.gym_id,
+                sucursal=sucursal,
+                nombre=v['nombre'].strip(),
+                apellido=v.get('apellido', '').strip(),
+                telefono=v.get('telefono', '').strip(),
+                es_visita=True,
+                numero_socio=siguiente_numero_socio(request.user.gym_id),
+            )
+            membresia = Membresia.objects.create(
+                socio=socio, plan=plan, sucursal=sucursal,
+                fecha_inicio=hoy,
+                # Vale por hoy: mañana ya no está vigente y no vuelve a abrir la
+                # puerta. Sin fecha_fin sería un pase indefinido pagado como un día.
+                fecha_fin=hoy,
+                estado='activa',
+            )
+            pago = Pago.objects.create(
+                membresia=membresia, monto=v['monto'], metodo=v['metodo'],
+                registrado_por=request.user,
+            )
+            acceso = Acceso.objects.create(
+                socio=socio, sucursal=sucursal, membresia=membresia,
+                metodo_usado='manual', resultado='permitido',
+            )
+
+        return Response({
+            'socio_id': socio.id,
+            'numero_socio': socio.numero_socio,
+            'nombre': f'{socio.nombre} {socio.apellido}'.strip(),
+            'plan': plan.nombre,
+            'monto': pago.monto,
+            'metodo': pago.metodo,
+            'acceso_id': acceso.id,
+            'sucursal': sucursal.nombre,
+        }, status=status.HTTP_201_CREATED)

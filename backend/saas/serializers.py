@@ -48,7 +48,12 @@ class TenantSerializer(serializers.ModelSerializer):
         # eliminado seguia contando como uso facturable del sistema.
         return (
             Membresia.objects.vigentes()
-            .filter(socio__gym_id=obj.id, socio__eliminado_en__isnull=True)
+            .filter(
+                socio__gym_id=obj.id, socio__eliminado_en__isnull=True,
+                # La membresia de un dia de una visita esta vigente justo hoy: sin
+                # esto, el uso facturable del gym sube y baja con los que pasaron.
+                socio__es_visita=False,
+            )
             .values('socio_id').distinct().count()
         )
 

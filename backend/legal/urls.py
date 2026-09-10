@@ -2,8 +2,8 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
-    AceptarDocumentoView, AceptarAvisoPublicoView, AvisoPublicoView,
-    ConsentimientoSocioViewSet, DocumentoLegalViewSet, PendientesAceptarView,
+    AceptarDocumentoView, ConsentimientoSocioViewSet, DocumentoLegalViewSet,
+    PendientesAceptarView,
 )
 
 router = DefaultRouter()
@@ -13,7 +13,5 @@ router.register('documentos', DocumentoLegalViewSet, basename='documentos-legale
 urlpatterns = [
     path('pendientes/', PendientesAceptarView.as_view(), name='legal-pendientes'),
     path('aceptar/', AceptarDocumentoView.as_view(), name='legal-aceptar'),
-    path('publico/<str:token>/', AvisoPublicoView.as_view(), name='legal-aviso-publico'),
-    path('publico/<str:token>/aceptar/', AceptarAvisoPublicoView.as_view(), name='legal-aviso-publico-aceptar'),
     path('', include(router.urls)),
 ]

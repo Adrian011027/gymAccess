@@ -3,6 +3,11 @@ import { QRCodeSVG } from 'qrcode.react'
 import api from '../api/axios'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
+import SucursalSelector from '../components/SucursalSelector'
+import {
+  destinatarioWhatsApp, mensajeQR, urlPublicaDelQR, urlWhatsApp,
+} from '../lib/whatsappQR'
+import { enDias, fechaLocal } from '../lib/fechas'
 import Markdown from '../components/Markdown'
 
 const CARD_STYLE = { backgroundColor: '#161b22', border: '1px solid #21262d' }
@@ -16,19 +21,6 @@ const EMPTY = {
   fecha_nacimiento: '', plan_id: '', sucursal: '',
   tutor_nombre: '', tutor_parentesco: '', tutor_telefono: '',
   acepta_aviso: false,
-}
-
-// Fecha LOCAL en formato YYYY-MM-DD. `toISOString()` convierte a UTC: en México
-// (UTC-6) a partir de las 18:00 devuelve el día siguiente, y una membresía que
-// empieza mañana no está vigente hoy —`Membresia.vigentes()` exige
-// `fecha_inicio <= hoy`—, así que el check-in rechazaba al socio que acababa de pagar.
-const fechaLocal = (d = new Date()) =>
-  new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
-
-const enDias = dias => {
-  const d = new Date()
-  d.setDate(d.getDate() + dias)
-  return fechaLocal(d)
 }
 
 // Un menor no puede consentir el tratamiento de sus datos: lo hace quien ejerce la
@@ -110,6 +102,8 @@ export default function Socios() {
   // Derechos ARCO: el socio puede pedir ver sus datos y pedir que se borren.
   const [eliminando, setEliminando] = useState(null)
   const [eliminandoLoading, setEliminandoLoading] = useState(false)
+  const [bajaTexto, setBajaTexto] = useState('')
+  const [sucursalFiltro, setSucursalFiltro] = useState('')
   const [cancelando, setCancelando] = useState(null)
   const [cancelPass, setCancelPass] = useState('')
   const [cancelTexto, setCancelTexto] = useState('')
@@ -126,8 +120,11 @@ export default function Socios() {
   // El listado sin busqueda viene acotado a tu sucursal desde el backend; con
   // `buscar` el servidor recorre el gym entero para poder atender al socio de otro
   // local que llega de visita. Por eso el filtrado de texto ya no se hace aqui.
-  const load = (q = search) => {
-    const params = q.trim() ? { buscar: q.trim() } : {}
+  const load = (texto = search) => {
+    const params = texto.trim() ? { buscar: texto.trim() } : {}
+    // El id sale del sufijo que arma SucursalSelector ('' o '?sucursal=N').
+    const suc = sucursalFiltro.replace('?sucursal=', '')
+    if (suc) params.sucursal = suc
     return api.get('/socios/', { params }).then(r => setSocios(r.data)).catch(() => {})
   }
 
@@ -136,7 +133,7 @@ export default function Socios() {
     const t = setTimeout(() => load(search), 300)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search])
+  }, [search, sucursalFiltro])
 
   useEffect(() => {
     api.get('/socios/planes/').then(r => setPlanes(r.data)).catch(() => {})
@@ -155,7 +152,10 @@ export default function Socios() {
     setQrLoading(true)
     try {
       const { data } = await api.post('/accesos/asignar-qr/', { socio_id: qrModal.id })
-      setQrModal(m => ({ ...m, codigo_acceso: data.token }))
+      setQrModal(m => ({
+        ...m, codigo_acceso: data.token,
+        qr_imagen_url: data.imagen_url, qr_pagina_url: data.pagina_url,
+      }))
       toast.success('Código QR asignado')
       load()
     } catch (err) {
@@ -164,6 +164,9 @@ export default function Socios() {
       setQrLoading(false)
     }
   }
+
+  const destinoWhatsApp = destinatarioWhatsApp(qrModal)
+  const enlaceQR = urlPublicaDelQR(qrModal?.qr_pagina_url)
 
   const imprimirQR = () => {
     // Se imprime el nodo del QR tal cual: abrir una ventana con el SVG serializado
@@ -182,16 +185,98 @@ export default function Socios() {
     win.print()
   }
 
-  // wa.me exige el teléfono en dígitos con código de país. A 10 dígitos (formato
-  // que captura recepción) se le antepone 52 (México); si ya trae código de país
-  // capturado a mano, se respeta tal cual.
-  const enviarWhatsApp = socio => {
-    const digitos = (socio.telefono || '').replace(/\D/g, '')
-    if (!digitos) return
-    const numero = digitos.length === 10 ? `52${digitos}` : digitos
-    const link = `${window.location.origin}/aviso/${socio.codigo_acceso}`
-    const texto = `Hola ${socio.nombre}, antes de darte tu código de acceso necesitamos que aceptes nuestro aviso de privacidad. Ábrelo aquí: ${link}`
-    window.open(`https://wa.me/${numero}?text=${encodeURIComponent(texto)}`, '_blank')
+  /** El QR solo, como PNG cuadrado y con su margen blanco.
+   *
+   * Nada de nombre ni texto encima: lo que se manda por chat es el código, y el
+   * mensaje que va al lado ya dice de quién es y cuál es. Una imagen con rótulos se
+   * ve como un volante y se reenvía peor que un QR a secas.
+   *
+   * PNG y no JPG a propósito: el JPG comprime con pérdida y los artefactos alrededor
+   * de los módulos negros son justo lo que hace que un escáner dude.
+   */
+  const qrComoPNG = () => new Promise((resolve, reject) => {
+    const svg = document.getElementById('qr-socio')
+    if (!svg) return reject(new Error('El QR no está en pantalla'))
+
+    // El viewBox del SVG viene en módulos (los cuadritos del código), no en píxeles.
+    // Leerlo de ahí permite dejar el margen que pide la norma —4 módulos— en vez de un
+    // número redondo de píxeles que en un código denso se queda corto y deja de leerse
+    // pegado al borde de la burbuja del chat.
+    const modulos = Number(svg.getAttribute('viewBox')?.split(' ')[2]) || 25
+    const escala = Math.max(4, Math.round(720 / (modulos + 8)))
+    const dibujo = modulos * escala
+    const margen = 4 * escala
+    const lado = dibujo + 2 * margen
+
+    // Se rasteriza a tamaño final, no al de pantalla: el SVG del modal mide 168 px y
+    // dejar que el navegador lo estire al vuelo da módulos con el borde lavado, que es
+    // como un QR nítido en pantalla llega borroso al chat.
+    const clon = svg.cloneNode(true)
+    clon.setAttribute('width', String(dibujo))
+    clon.setAttribute('height', String(dibujo))
+    const url = URL.createObjectURL(new Blob(
+      [new XMLSerializer().serializeToString(clon)],
+      { type: 'image/svg+xml;charset=utf-8' },
+    ))
+
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const canvas = document.createElement('canvas')
+      canvas.width = lado
+      canvas.height = lado
+      const ctx = canvas.getContext('2d')
+      // El QR necesita fondo blanco propio: un PNG transparente sobre el tema oscuro
+      // de WhatsApp queda negro sobre negro y no lo lee nadie.
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, lado, lado)
+      ctx.drawImage(img, margen, margen, dibujo, dibujo)
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error('No se pudo generar el PNG')), 'image/png')
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('No se pudo leer el QR')) }
+    img.src = url
+  })
+
+  const descargarQR = async socio => {
+    const png = await qrComoPNG()
+    const url = URL.createObjectURL(png)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `qr-${socio.nombre}-${socio.apellido}.png`.replace(/\s+/g, '-').toLowerCase()
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  /** Abre el chat del socio con el mensaje escrito y el QR ya en el portapapeles.
+   *
+   * WhatsApp NO deja adjuntar una imagen desde la URL: `wa.me` y `web.whatsapp.com/send`
+   * solo admiten texto prellenado, y mandar el archivo por su cuenta exige la API de
+   * negocios de Meta. Lo más cerca que se llega desde el navegador es dejar el PNG
+   * copiado para que recepción solo pegue con Ctrl+V; si el navegador no permite
+   * copiar imágenes, se descarga y se adjunta a mano.
+   */
+  const enviarQRPorWhatsApp = async () => {
+    const destino = destinatarioWhatsApp(qrModal)
+    if (!destino) return
+    let copiado = false
+    try {
+      // Se le pasa la promesa, no el PNG ya resuelto: `clipboard.write` tiene que
+      // salir dentro del clic, y esperar a que el lienzo termine antes de llamarla
+      // deja el permiso fuera del gesto en Safari.
+      await navigator.clipboard.write([
+        new ClipboardItem({ 'image/png': qrComoPNG() }),
+      ])
+      copiado = true
+    } catch {
+      // Firefox viejo, http sin candado o permiso denegado: queda el archivo.
+      try { await descargarQR(qrModal) } catch { /* sin imagen, pero el chat abre igual */ }
+    }
+    // El chat se abre DESPUÉS de copiar: `clipboard.write` exige que esta pestaña
+    // tenga el foco, y abrir WhatsApp antes se lo quita y la copia falla.
+    window.open(urlWhatsApp(destino.telefono, mensajeQR(qrModal, destino)), '_blank', 'noopener')
+    toast.success(copiado
+      ? 'QR copiado: pégalo en el chat con Ctrl + V'
+      : 'QR descargado: adjúntalo en el chat')
   }
 
   const exportarDatos = async socio => {
@@ -390,11 +475,15 @@ export default function Socios() {
 
   const eliminarSocio = async () => {
     if (!eliminando) return
+    // Se revalida aquí y no solo con el `disabled` del botón: el estado puede quedar
+    // desfasado si se cambia de socio con el modal abierto.
+    if (bajaTexto.trim().toLowerCase() !== 'eliminar') return
     setEliminandoLoading(true)
     try {
       await api.delete(`/socios/${eliminando.id}/`)
       toast.success(`${eliminando.nombre} ${eliminando.apellido} dado de baja`)
       setEliminando(null)
+      setBajaTexto('')
       load()
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'No se pudo dar de baja al socio')
@@ -403,13 +492,12 @@ export default function Socios() {
     }
   }
 
-  const activos = socios.filter(s => s.activo).length
-  const inactivos = socios.filter(s => !s.activo).length
+  const cuenta = clave => socios.filter(s => estadoSocio(s).clave === clave).length
 
   // Solo el filtro de estado: el de texto lo aplica el servidor, que ademas es el
   // unico que puede ver mas alla de tu sucursal.
   const filtered = socios
-    .filter(s => filtro === 'activos' ? s.activo : filtro === 'inactivos' ? !s.activo : true)
+    .filter(s => filtro === 'todos' || estadoSocio(s).clave === filtro)
 
   const inputCls = 'w-full rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none text-white'
 
@@ -418,7 +506,10 @@ export default function Socios() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-black text-white uppercase tracking-wide">SOCIOS</h2>
-          <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>{activos} activos · {inactivos} inactivos</p>
+          <p className="text-xs mt-0.5" style={{ color: '#8b949e' }}>
+            {cuenta('corriente')} al corriente · {cuenta('vencido')} vencidos
+            {cuenta('suspendido') > 0 && ` · ${cuenta('suspendido')} suspendidos`}
+          </p>
         </div>
         <button
           onClick={() => { setForm({ ...EMPTY, sucursal: sucursalId || '' }); setModal(true) }}
@@ -430,6 +521,8 @@ export default function Socios() {
           + Nuevo Socio
         </button>
       </div>
+
+      <SucursalSelector onChange={setSucursalFiltro} />
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg flex-1 sm:max-w-md" style={CARD_STYLE}>
@@ -445,7 +538,13 @@ export default function Socios() {
           />
         </div>
         <div className="flex gap-1 flex-wrap">
-          {[['todos', 'Todos'], ['activos', 'Activos'], ['inactivos', 'Inactivos']].map(([v, l]) => (
+          {[
+            ['todos', 'Todos'],
+            ['corriente', 'Al corriente'],
+            ['vencido', 'Vencidos'],
+            ['sin_plan', 'Sin membresía'],
+            ['suspendido', 'Suspendidos'],
+          ].map(([v, l]) => (
             <button
               key={v}
               onClick={() => setFiltro(v)}
@@ -489,6 +588,16 @@ export default function Socios() {
                       </div>
                       <div className="min-w-0">
                         <span className="text-xs font-semibold text-white">{s.nombre} {s.apellido}</span>
+                        {/* Solo aparece al buscar: el listado ya no trae visitas. Sin
+                            esta marca, el de mostrador se lee como un socio mas y
+                            recepcion le cobra una renovacion que nunca contrato. */}
+                        {s.es_visita && (
+                          <span className="ml-2 text-[9px] font-bold px-1.5 py-0.5 rounded align-middle"
+                            title="Pago una visita suelta; no esta inscrito"
+                            style={{ backgroundColor: 'rgba(139,148,158,0.15)', color: '#8b949e' }}>
+                            VISITA
+                          </span>
+                        )}
                         {/* Se ve a los socios de todas las sucursales, pero se marca
                             cuáles no son de aquí: ver no es lo mismo que dejar entrar. */}
                         {s.sucursal && sucursalId && s.sucursal !== sucursalId && (
@@ -558,12 +667,15 @@ export default function Socios() {
                     {vence || '—'}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: s.activo ? '#22c55e' : '#ef4444' }} />
-                      <span className="text-[10px] font-semibold" style={{ color: s.activo ? '#22c55e' : '#ef4444' }}>
-                        {s.activo ? 'Activo' : 'Inactivo'}
-                      </span>
-                    </div>
+                    {(() => {
+                      const e = estadoSocio(s)
+                      return (
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: e.color }} />
+                          <span className="text-[10px] font-semibold" style={{ color: e.color }}>{e.texto}</span>
+                        </div>
+                      )
+                    })()}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-3">
@@ -591,7 +703,7 @@ export default function Socios() {
                               de abrir, pero pagos, accesos y consentimientos quedan.
                               Icono de archivar y NO de bote: el bote de al lado es la
                               cancelacion ARCO, que si es irreversible. */}
-                          <button onClick={() => setEliminando(s)}
+                          <button onClick={() => { setEliminando(s); setBajaTexto('') }}
                             title="Dar de baja al socio (reversible)"
                             style={{ color: '#8b949e' }} className="transition-colors"
                             onMouseEnter={e => e.currentTarget.style.color = '#f97316'}
@@ -900,16 +1012,34 @@ export default function Socios() {
               No se borra nada: sus pagos, membresias, accesos y consentimientos se
               conservan. Se puede reactivar despues.
             </p>
+            {/* La palabra escrita, igual que en Empleados. El botón suelto se pulsa
+                por inercia desde la fila equivocada, y el socio desaparece del
+                listado sin que nadie note cuál se fue. */}
+            <label className="block mt-4">
+              <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>
+                ESCRIBE <span className="text-white font-bold">eliminar</span> PARA CONFIRMAR
+              </span>
+              <input
+                autoFocus
+                autoComplete="off"
+                value={bajaTexto}
+                onChange={e => setBajaTexto(e.target.value)}
+                placeholder="eliminar"
+                className="w-full rounded-lg px-3 py-2 text-sm mt-1 outline-none text-white"
+                style={INPUT_STYLE}
+              />
+            </label>
             <div className="flex gap-2 mt-5">
-              <button type="button" onClick={() => setEliminando(null)}
+              <button type="button" onClick={() => { setEliminando(null); setBajaTexto('') }}
                 className="flex-1 py-2.5 rounded-lg text-xs font-bold"
                 style={{ backgroundColor: '#21262d', color: '#8b949e' }}>
                 Cancelar
               </button>
-              <button type="button" onClick={eliminarSocio} disabled={eliminandoLoading}
-                className="flex-1 py-2.5 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+              <button type="button" onClick={eliminarSocio}
+                disabled={eliminandoLoading || bajaTexto.trim().toLowerCase() !== 'eliminar'}
+                className="flex-1 py-2.5 rounded-lg text-xs font-bold transition-all disabled:opacity-40"
                 style={{ backgroundColor: '#f97316', color: '#0d1117' }}>
-                {eliminandoLoading ? 'Dando de baja...' : 'Dar de baja'}
+                {eliminandoLoading ? 'Dando de baja...' : 'Eliminar'}
               </button>
             </div>
           </div>
@@ -1078,37 +1208,75 @@ export default function Socios() {
                 >
                   {qrModal.codigo_acceso}
                 </button>
-                <div className="flex gap-3">
+                <div className="space-y-2">
+                  {/* Mandar el QR es lo que más se hace con él: el socio lo trae en el
+                      teléfono y no hay que imprimir nada. Por eso va arriba y solo. */}
                   <button
-                    onClick={() => setQrModal(null)}
-                    className="flex-1 py-2.5 rounded-lg text-xs font-semibold"
-                    style={{ border: '1px solid #21262d', color: '#8b949e', backgroundColor: 'transparent' }}
+                    onClick={enviarQRPorWhatsApp}
+                    disabled={!destinoWhatsApp}
+                    title={destinoWhatsApp
+                      ? `Abrir chat con +${destinoWhatsApp.telefono}`
+                      : 'Sin teléfono registrado no hay a dónde enviarlo'}
+                    className="w-full py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ backgroundColor: '#25d366', color: '#0d1117' }}
                   >
-                    Cerrar
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51l-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                    </svg>
+                    Enviar por WhatsApp
                   </button>
-                  <button
-                    onClick={imprimirQR}
-                    className="flex-1 py-2.5 rounded-lg text-xs font-bold"
-                    style={{ backgroundColor: '#22c55e', color: '#0d1117' }}
-                  >
-                    Imprimir
-                  </button>
+                  {/* Se dice de antemano que hay que pegar: WhatsApp no deja adjuntar
+                      la imagen desde el enlace, y un chat que abre "vacío" parece un
+                      botón roto si nadie avisó que el QR ya está en el portapapeles. */}
+                  <p className="text-[10px] leading-relaxed text-left" style={{ color: '#8b949e' }}>
+                    {!destinoWhatsApp ? (
+                      'Este socio no tiene teléfono registrado. Agrégalo desde Editar para poder enviarle el QR.'
+                    ) : (
+                      <>
+                        Abre el chat de{' '}
+                        <span className="text-white font-semibold">
+                          {destinoWhatsApp.esTutor ? `${destinoWhatsApp.nombre} (tutor)` : destinoWhatsApp.nombre}
+                        </span>{' '}
+                        · +{destinoWhatsApp.telefono}.{' '}
+                        {/* Se distingue el caso porque el trabajo que le queda a
+                            recepción es distinto: con enlace, ninguno; sin él, pegar. */}
+                        {enlaceQR ? (
+                          <>
+                            El mensaje lleva un <span className="text-white font-semibold">enlace</span> que
+                            el socio pulsa para ver su QR, así que basta con enviarlo. La imagen también
+                            queda copiada por si prefieres pegarla en el chat.
+                          </>
+                        ) : (
+                          <>
+                            El QR queda copiado: pégalo con{' '}
+                            <span className="text-white font-semibold">Ctrl + V</span> y envía.
+                            <span className="block mt-1" style={{ color: '#3d444d' }}>
+                              El enlace a la imagen se manda solo cuando el sistema corre en un
+                              dominio público; en local no se incluye porque el teléfono del socio
+                              no puede abrirlo.
+                            </span>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </p>
+                  <div className="flex gap-3 pt-1">
+                    <button
+                      onClick={() => setQrModal(null)}
+                      className="flex-1 py-2.5 rounded-lg text-xs font-semibold"
+                      style={{ border: '1px solid #21262d', color: '#8b949e', backgroundColor: 'transparent' }}
+                    >
+                      Cerrar
+                    </button>
+                    <button
+                      onClick={imprimirQR}
+                      className="flex-1 py-2.5 rounded-lg text-xs font-bold"
+                      style={{ backgroundColor: '#22c55e', color: '#0d1117' }}
+                    >
+                      Imprimir
+                    </button>
+                  </div>
                 </div>
-                {/* El QR no viaja solo: el link obliga a aceptar el aviso de
-                    privacidad antes de mostrarlo, así que enviarlo por WhatsApp
-                    también deja evidencia del consentimiento del socio. */}
-                <button
-                  onClick={() => enviarWhatsApp(qrModal)}
-                  disabled={!qrModal.telefono}
-                  title={qrModal.telefono ? '' : 'Este socio no tiene teléfono registrado'}
-                  className="w-full mt-3 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-40"
-                  style={{ backgroundColor: '#25D366', color: '#052e16' }}
-                >
-                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.27-1.38a9.9 9.9 0 0 0 4.77 1.21h.01c5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.78 14.15c-.24.68-1.42 1.3-1.96 1.38-.5.08-1.13.11-1.82-.12-.42-.13-.96-.31-1.65-.6-2.9-1.25-4.79-4.17-4.94-4.36-.14-.2-1.18-1.57-1.18-3 0-1.42.75-2.12 1.02-2.41.27-.29.58-.36.78-.36.19 0 .39 0 .56.01.18.01.42-.07.65.5.24.58.82 2 .89 2.14.07.15.12.32.02.51-.09.19-.14.31-.28.48-.14.16-.29.36-.42.49-.14.14-.28.29-.12.56.16.28.71 1.17 1.52 1.9 1.05.94 1.93 1.23 2.21 1.37.28.14.44.12.6-.07.16-.19.7-.82.89-1.1.19-.28.38-.23.63-.14.26.09 1.63.77 1.91.91.28.14.47.21.54.33.07.12.07.68-.17 1.36z" />
-                  </svg>
-                  Enviar por WhatsApp
-                </button>
               </>
             ) : (
               <>
@@ -1138,6 +1306,27 @@ export default function Socios() {
       )}
     </div>
   )
+}
+
+
+/**
+ * El único estado que se muestra del socio, y responde a la pregunta que recepción
+ * se hace de verdad: ¿puede entrar hoy?
+ *
+ * Antes convivían dos etiquetas que se contradecían. "Activo" verde junto a una
+ * membresía vencida se leía como "todo bien" cuando esa persona iba a rebotar en la
+ * puerta: `activo` solo dice que no está dado de baja a mano, no que esté al
+ * corriente. Aquí se colapsan en un estado con el mismo orden de precedencia que
+ * aplica el check-in (CheckInView): primero la baja, luego la vigencia.
+ */
+function estadoSocio(s) {
+  if (!s.activo) return { clave: 'suspendido', texto: 'Suspendido', color: '#ef4444' }
+  if (s.membresia_activa) return { clave: 'corriente', texto: 'Al corriente', color: '#22c55e' }
+  // Sin membresía nunca es lo mismo que vencido: a uno se le cobra la renovación, al
+  // otro le falta el alta. Decir "Vencido" a quien nunca tuvo plan manda a recepción
+  // a buscar un pago que no existe.
+  if (s.membresia_reciente) return { clave: 'vencido', texto: 'Vencido', color: '#f97316' }
+  return { clave: 'sin_plan', texto: 'Sin membresía', color: '#8b949e' }
 }
 
 function vencePronto(fecha) {

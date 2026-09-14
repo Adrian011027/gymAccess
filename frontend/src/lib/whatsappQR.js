@@ -99,7 +99,14 @@ export function mensajeQR(socio, destino, { avisoPendiente: pendiente = false } 
     pagina
       ? `\n${destino.esTutor ? 'Ver su' : 'Ver tu'} código QR: ${pagina}`
       : `\nCódigo: ${socio.codigo_acceso}`,
-  ].join('\n')
+    // Sin enlace no hay página que pida el aviso, pero el socio igual tiene que saber
+    // que le falta aceptarlo: si el mensaje calla, nadie se lo vuelve a pedir.
+    pendiente && !pagina
+      ? (destino.esTutor
+        ? `\nFalta aceptar nuestro aviso de privacidad en nombre de ${socio.nombre}: pídelo en recepción.`
+        : '\nFalta que aceptes nuestro aviso de privacidad: pídelo en recepción.')
+      : null,
+  ].filter(Boolean).join('\n')
 }
 
 // En el escritorio de recepción interesa WhatsApp Web, donde la sesión ya está abierta;

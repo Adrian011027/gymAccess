@@ -375,7 +375,7 @@ export default function Configuracion() {
               })}
             </ul>
             <Link to="/legal" className="inline-block mt-3 text-[11px] font-bold underline" style={{ color: '#22c55e' }}>
-              Generar y publicar el aviso en Legal →
+              Generar y guardar el aviso en Legal →
             </Link>
           </div>
         </div>

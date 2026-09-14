@@ -285,7 +285,10 @@ export default function Socios() {
     }
     // El chat se abre DESPUÉS de copiar: `clipboard.write` exige que esta pestaña
     // tenga el foco, y abrir WhatsApp antes se lo quita y la copia falla.
-    window.open(urlWhatsApp(destino.telefono, mensajeQR(qrModal, destino)), '_blank', 'noopener')
+    window.open(
+      urlWhatsApp(destino.telefono, mensajeQR(qrModal, destino, { avisoPendiente: avisoPorAceptar })),
+      '_blank', 'noopener',
+    )
     toast.success(copiado
       ? 'QR copiado: pégalo en el chat con Ctrl + V'
       : 'QR descargado: adjúntalo en el chat')

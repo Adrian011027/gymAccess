@@ -62,7 +62,7 @@ export default function Legal() {
     const d = err.response?.data
     if (typeof d === 'string') return d
     if (typeof d === 'object' && d) return String(Object.values(d).flat()[0])
-    return 'No se pudo publicar'
+    return 'No se pudo guardar'
   }
 
   // Llena el formulario con la plantilla y los datos del gym. No publica: el admin
@@ -106,7 +106,7 @@ export default function Legal() {
     setError('')
     try {
       await api.post('/legal/documentos/', { ...form, tipo: AVISO })
-      toast.success(`Aviso de privacidad v${form.version} publicado`)
+      toast.success(`Aviso de privacidad v${form.version} guardado`)
       setModal(false)
       setForm(FORM_VACIO)
       cargar()
@@ -167,7 +167,7 @@ export default function Legal() {
                     <button onClick={abrirNuevaVersion}
                       className="px-3 py-2 rounded-lg text-xs font-bold"
                       style={{ backgroundColor: '#22c55e', color: '#0d1117' }}>
-                      {doc ? 'Nueva versión' : 'Publicar'}
+                      {doc ? 'Nueva versión' : 'Crear aviso'}
                     </button>
                   )}
                 </div>
@@ -237,11 +237,12 @@ export default function Legal() {
       {modal && (
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
           <div className="rounded-2xl p-6 w-full max-w-2xl my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
-            <h2 className="text-sm font-bold text-white mb-1">Publicar aviso de privacidad</h2>
+            <h2 className="text-sm font-bold text-white mb-1">Guardar aviso de privacidad</h2>
             <p className="text-[10px] mb-3 leading-relaxed" style={{ color: '#8b949e' }}>
               Se crea una versión nueva; la anterior se conserva porque los
               consentimientos ya firmados apuntan a ella. El texto se puede generar con la
-              plantilla y los datos de tu gym. Revísalo con un abogado antes de publicarlo.
+              plantilla y los datos de tu gym. Guardarlo no le envía nada a nadie: los socios
+              lo ven al abrir el enlace de su QR. Revísalo con un abogado antes de guardarlo.
             </p>
             <button type="button" onClick={generarDesdeGym} disabled={generando}
               className="w-full mb-4 py-2.5 rounded-lg text-xs font-bold disabled:opacity-50"
@@ -308,7 +309,7 @@ export default function Legal() {
                 <button type="submit" disabled={guardando}
                   className="flex-1 py-2.5 rounded-lg text-xs font-bold disabled:opacity-50"
                   style={{ backgroundColor: '#22c55e', color: '#0d1117' }}>
-                  {guardando ? 'Publicando...' : 'Publicar'}
+                  {guardando ? 'Guardando...' : 'Guardar'}
                 </button>
               </div>
             </form>

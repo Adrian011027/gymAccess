@@ -208,12 +208,25 @@ describe('mensajeQR', () => {
     expect(texto).toContain('Aceptar el aviso y ver su código QR:')
   })
 
-  it('sin enlace público el aviso pendiente no cambia nada: solo queda el código', () => {
+  it('sin enlace público manda el código y avisa que falta aceptar en recepción', () => {
     const socio = { ...socioBase, qr_pagina_url: 'http://localhost:8001/api/accesos/qr/T/' }
     const texto = mensajeQR(socio, destinatarioWhatsApp(socio), { avisoPendiente: true })
 
     expect(texto).toContain('Código: R3B-QR-00030-N87LmCpAxTZCT0Hj')
-    expect(texto).not.toContain('aviso')
+    expect(texto).toContain('Falta que aceptes nuestro aviso de privacidad: pídelo en recepción.')
+    expect(texto).not.toContain('localhost')
+  })
+
+  it('sin enlace y con el aviso ya aceptado no menciona el aviso', () => {
+    const socio = { ...socioBase, qr_pagina_url: null }
+    expect(mensajeQR(socio, destinatarioWhatsApp(socio))).not.toContain('aviso')
+  })
+
+  it('sin enlace, al tutor le pide aceptar en nombre del socio', () => {
+    const socio = { ...socioBase, telefono: '', tutor_telefono: '3312345678', qr_pagina_url: null }
+    const texto = mensajeQR(socio, destinatarioWhatsApp(socio), { avisoPendiente: true })
+
+    expect(texto).toContain('Falta aceptar nuestro aviso de privacidad en nombre de Jose')
   })
 })
 

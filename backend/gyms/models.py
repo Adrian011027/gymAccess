@@ -20,6 +20,10 @@ class Gym(models.Model):
     ]
 
     nombre = models.CharField(max_length=200)
+    # El nombre legal del negocio (persona física o moral), que es quien responde por
+    # los datos de los socios en el aviso de privacidad. No se reutiliza `nombre`
+    # porque el comercial ("Round3 Boxing") casi nunca coincide con el del SAT.
+    razon_social = models.CharField(max_length=200, blank=True)
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, default='mixto')
     logo = models.ImageField(upload_to='gyms/logos/', null=True, blank=True)
     telefono = models.CharField(max_length=20, blank=True)

@@ -71,6 +71,8 @@ export default function Dashboard() {
   const hoyISO = hoyLocal()
   const haceSemanaISO = enDias(-6)
   const pagosPendientes = membresias
+    // Semanal y visita no se renuevan: al acabarse no son un pago pendiente.
+    .filter(m => m.plan_renovable !== false)
     .filter(m =>
       m.estado === 'pendiente_pago' ||
       (m.fecha_fin && m.fecha_fin <= hoyISO && m.fecha_fin >= haceSemanaISO && m.estado !== 'suspendida')

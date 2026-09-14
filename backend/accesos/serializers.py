@@ -44,7 +44,10 @@ class VisitaSerializer(serializers.Serializer):
     id de la mensualidad daría acceso de un mes cobrando el precio de un día.
     """
 
-    nombre = serializers.CharField(max_length=150)
+    # `socio`: alguien que ya vino antes. Con él no se piden nombre ni teléfono: se
+    # cobra sobre su ficha en vez de crear otra persona igual.
+    socio = serializers.IntegerField(required=False)
+    nombre = serializers.CharField(max_length=150, required=False, allow_blank=True)
     apellido = serializers.CharField(max_length=150, required=False, allow_blank=True)
     telefono = serializers.CharField(max_length=20, required=False, allow_blank=True)
     plan = serializers.IntegerField()
@@ -72,7 +75,19 @@ class VisitaSerializer(serializers.Serializer):
             raise serializers.ValidationError('Sucursal no encontrada.')
         return sucursal
 
+    def validate_socio(self, valor):
+        from socios.models import Socio
+        gym_id = self.context['request'].user.gym_id
+        socio = Socio.objects.vivos().filter(id=valor, gym_id=gym_id, activo=True).first()
+        if socio is None:
+            raise serializers.ValidationError('Socio no encontrado.')
+        return socio
+
     def validate(self, attrs):
+        if attrs.get('socio') is None and not (attrs.get('nombre') or '').strip():
+            raise serializers.ValidationError(
+                {'nombre': 'Escribe el nombre del visitante o busca a quien ya vino antes.'}
+            )
         if attrs.get('monto') is None:
             # `precio_en` y no `plan.precio` a secas: el gym que cobra la visita más
             # barata en una sucursal ya tiene esa excepción en `PrecioPlanSucursal`,

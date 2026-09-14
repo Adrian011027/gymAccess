@@ -22,6 +22,10 @@ node_modules/
 .vscode/
 .idea/
 *.md
+# La plantilla del aviso de privacidad es código, no documentación: sin ella el
+# endpoint que genera el aviso de cada gym revienta. (`*.md` de arriba solo casa en la
+# raíz, pero la excepción explícita evita que un `**/*.md` futuro la saque en silencio.)
+!backend/legal/plantillas/*.md
 
 # Ojo al excluir carpetas de la raíz por nombre: existe `legal/` en la raíz y
 # también la app `backend/legal/`. Docker compara contra la ruta completa, así que

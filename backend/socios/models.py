@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db import models
 from django.utils import timezone
 from gyms.models import Gym, Sucursal
@@ -5,6 +7,7 @@ from gyms.models import Gym, Sucursal
 
 class Plan(models.Model):
     TIPO_CHOICES = [
+        ('semanal', 'Semanal'),
         ('mensual', 'Mensual'),
         ('trimestral', 'Trimestral'),
         ('semestral', 'Semestral'),
@@ -12,6 +15,11 @@ class Plan(models.Model):
         ('visita', 'Visita Suelta'),
         ('clases', 'Paquete de Clases'),
     ]
+
+    # Planes de uso suelto: quien los compra no se compromete a volver. Cuando se
+    # acaban no son un cobro atrasado —no salen en "Por cobrar", no notifican "pago
+    # vencido"—, el socio simplemente queda sin membresía activa hasta que pague otro.
+    TIPOS_SIN_RENOVACION = ('semanal', 'visita')
 
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='planes')
     nombre = models.CharField(max_length=100)
@@ -26,6 +34,25 @@ class Plan(models.Model):
 
     def __str__(self):
         return f'{self.nombre} - ${self.precio}'
+
+    @property
+    def renovable(self):
+        return self.tipo not in self.TIPOS_SIN_RENOVACION
+
+    def fecha_fin_desde(self, inicio):
+        """Último día en que la membresía da acceso, contando `inicio`.
+
+        La visita vale solo ese día. El semanal cuenta días de uso: "7 días" son del
+        día que paga al sexto siguiente, no ocho fechas. Los demás conservan la cuenta
+        de siempre (inicio + duración) para no mover las fechas de quien ya paga así.
+        """
+        if self.tipo == 'visita':
+            return inicio
+        if not self.duracion_dias:
+            return None
+        if self.tipo == 'semanal':
+            return inicio + timedelta(days=self.duracion_dias - 1)
+        return inicio + timedelta(days=self.duracion_dias)
 
     def precio_en(self, sucursal_id):
         """Precio efectivo del plan en una sucursal.
@@ -211,6 +238,10 @@ class MembresiaQuerySet(models.QuerySet):
             fecha_inicio__lte=hoy,
         ).filter(
             models.Q(fecha_fin__gte=hoy) | models.Q(fecha_fin__isnull=True)
+        ).filter(
+            # Con clases contadas (semanal, paquete) se acaba al gastar la última,
+            # aunque le queden días: "5 clases o 7 días, lo que ocurra primero".
+            models.Q(clases_restantes__isnull=True) | models.Q(clases_restantes__gt=0)
         )
 
     def caducadas(self, hoy=None):
@@ -243,6 +274,34 @@ class Membresia(models.Model):
 
     def __str__(self):
         return f'{self.socio} - {self.plan} ({self.estado})'
+
+    def ajustar_a_plan(self, plan, hoy=None):
+        """Aplica las reglas del plan nuevo al cambiar de plan, sin regalar nada.
+
+        Cambiar de plan no es cobrar, así que solo puede recortar:
+        - clases: las del plan nuevo, pero nunca más de las que ya le quedaban; un plan
+          sin clases contadas quita el tope;
+        - fecha (semanal, visita): su período cuenta desde hoy y nunca pasa del fin que
+          ya tenía pagado. De un mensual al 19 a un semanal hoy 14: fin el 19, 5 clases.
+        Los planes que se renuevan conservan sus fechas, como siempre: alargar la
+        vigencia tiene su propio camino con contraseña (`ajustar-vencimiento`).
+        No guarda; devuelve la lista de campos tocados.
+        """
+        hoy = hoy or timezone.localdate()
+        self.plan = plan
+        campos = ['plan']
+        if plan.num_clases:
+            actuales = self.clases_restantes
+            self.clases_restantes = plan.num_clases if actuales is None else min(actuales, plan.num_clases)
+        else:
+            self.clases_restantes = None
+        campos.append('clases_restantes')
+        if not plan.renovable:
+            tope = plan.fecha_fin_desde(max(self.fecha_inicio, hoy))
+            if tope is not None:
+                self.fecha_fin = tope if self.fecha_fin is None else min(self.fecha_fin, tope)
+                campos.append('fecha_fin')
+        return campos
 
 
 class Pago(models.Model):

@@ -19,6 +19,9 @@ const VACIO = { nombre: '', apellido: '', telefono: '', metodo: 'efectivo', mont
  * así que su dinero no salía en el corte del día y su entrada no salía en la
  * afluencia. El backend lo resuelve en una sola operación (`/accesos/visita/`):
  * socio marcado como visita, membresía de un día, cobro y acceso.
+ *
+ * Quien ya vino antes se busca y se le cobra sobre su misma ficha: registrarlo otra
+ * vez duplicaba a la persona en cada visita.
  */
 export default function RegistroVisita({ sucursal, onRegistrada }) {
   const [abierto, setAbierto] = useState(false)
@@ -26,6 +29,9 @@ export default function RegistroVisita({ sucursal, onRegistrada }) {
   const [plan, setPlan] = useState('')
   const [form, setForm] = useState(VACIO)
   const [guardando, setGuardando] = useState(false)
+  const [busqueda, setBusqueda] = useState('')
+  const [resultados, setResultados] = useState([])
+  const [existente, setExistente] = useState(null)
 
   useEffect(() => {
     api.get('/socios/planes/')
@@ -36,6 +42,21 @@ export default function RegistroVisita({ sucursal, onRegistrada }) {
       })
       .catch(() => {})
   }, [])
+
+  // Busca mientras se escribe, con una pausa corta para no pedir por cada tecla.
+  useEffect(() => {
+    const termino = busqueda.trim()
+    if (termino.length < 2) {
+      setResultados([])
+      return
+    }
+    const t = setTimeout(() => {
+      api.get('/accesos/buscar-socio/', { params: { q: termino } })
+        .then(r => setResultados(r.data))
+        .catch(() => setResultados([]))
+    }, 300)
+    return () => clearTimeout(t)
+  }, [busqueda])
 
   // El precio puede traer excepción por sucursal (`PrecioPlanSucursal`) y el backend
   // cobra esa. El botón tiene que decir lo mismo: anunciando el precio base, recepción
@@ -51,28 +72,36 @@ export default function RegistroVisita({ sucursal, onRegistrada }) {
   // El precio del plan es la referencia; el campo permite cortesías y promociones.
   const aCobrar = form.monto !== '' ? form.monto : precioEn(planActual)
 
+  const limpiar = () => {
+    setForm(VACIO)
+    setExistente(null)
+    setBusqueda('')
+    setResultados([])
+  }
+
   const registrar = async e => {
     e.preventDefault()
     if (!sucursal) return toast.error('Selecciona la sucursal')
     setGuardando(true)
     try {
+      const persona = existente
+        ? { socio: existente.id }
+        : { nombre: form.nombre, apellido: form.apellido, telefono: form.telefono }
       const { data } = await api.post('/accesos/visita/', {
-        nombre: form.nombre,
-        apellido: form.apellido,
-        telefono: form.telefono,
+        ...persona,
         plan: Number(plan),
         sucursal: Number(sucursal),
         metodo: form.metodo,
         ...(form.monto !== '' ? { monto: form.monto } : {}),
       })
       toast.success(`${data.nombre} registrado · ${money(data.monto)} cobrado`)
-      setForm(VACIO)
+      limpiar()
       setAbierto(false)
       onRegistrada?.(data)
     } catch (err) {
       const d = err?.response?.data
       toast.error(
-        d?.plan?.[0] || d?.sucursal?.[0] || d?.nombre?.[0] || d?.detail
+        d?.socio?.[0] || d?.plan?.[0] || d?.sucursal?.[0] || d?.nombre?.[0] || d?.detail
         || 'No se pudo registrar la visita',
       )
     } finally {
@@ -115,35 +144,78 @@ export default function RegistroVisita({ sucursal, onRegistrada }) {
           </div>
         ) : (
           <form onSubmit={registrar} className="mt-4 space-y-3">
-            <div className="space-y-3">
-              <label className="block">
-                <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>NOMBRE</span>
-                <input required autoFocus value={form.nombre}
-                  onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))}
-                  className={inputCls} style={INPUT_STYLE} placeholder="Nombre" />
-              </label>
-              <label className="block">
-                <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>APELLIDO</span>
-                <input value={form.apellido}
-                  onChange={e => setForm(f => ({ ...f, apellido: e.target.value }))}
-                  className={inputCls} style={INPUT_STYLE} placeholder="Opcional" />
-              </label>
-              <label className="block">
-                <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>TELÉFONO</span>
-                <input value={form.telefono}
-                  onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))}
-                  className={inputCls} style={INPUT_STYLE} placeholder="Opcional" />
-              </label>
-              <label className="block">
-                <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>PLAN</span>
-                <select value={plan} onChange={e => setPlan(e.target.value)}
-                  className={inputCls} style={INPUT_STYLE}>
-                  {planes.map(p => (
-                    <option key={p.id} value={p.id}>{p.nombre} · {money(precioEn(p))}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
+            {existente ? (
+              <div className="rounded-lg p-3 flex items-center justify-between gap-2"
+                style={{ backgroundColor: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)' }}>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-white truncate">{existente.nombre}</p>
+                  <p className="text-[10px]" style={{ color: '#8b949e' }}>
+                    Ya está registrado{existente.numero_socio ? ` · #${existente.numero_socio}` : ''}: solo se cobra.
+                  </p>
+                </div>
+                <button type="button" onClick={() => setExistente(null)}
+                  className="text-[10px] font-semibold shrink-0" style={{ color: '#8b949e' }}>
+                  Cambiar
+                </button>
+              </div>
+            ) : (
+              <>
+                <label className="block">
+                  <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>
+                    ¿YA VINO ANTES? BÚSCALO
+                  </span>
+                  <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
+                    className={inputCls} style={INPUT_STYLE} placeholder="Nombre o número" />
+                </label>
+                {resultados.length > 0 && (
+                  <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #21262d' }}>
+                    {resultados.map(r => (
+                      <button key={r.id} type="button" disabled={r.al_corriente}
+                        onClick={() => { setExistente(r); setResultados([]) }}
+                        className="w-full text-left px-3 py-2 text-xs disabled:opacity-50"
+                        style={{ backgroundColor: '#0d1117', borderBottom: '1px solid #21262d' }}>
+                        <span className="text-white font-semibold">{r.nombre}</span>
+                        <span className="block text-[10px]" style={{ color: r.al_corriente ? '#22c55e' : '#8b949e' }}>
+                          {r.al_corriente
+                            ? `Tiene ${r.plan} activo: regístralo en el check-in`
+                            : `#${r.numero_socio ?? '—'} · sin membresía activa`}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <p className="text-[10px] pt-1" style={{ color: '#3d444d' }}>O regístralo si es su primera vez:</p>
+                <label className="block">
+                  <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>NOMBRE</span>
+                  <input value={form.nombre}
+                    onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))}
+                    className={inputCls} style={INPUT_STYLE} placeholder="Nombre" />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>APELLIDO</span>
+                  <input value={form.apellido}
+                    onChange={e => setForm(f => ({ ...f, apellido: e.target.value }))}
+                    className={inputCls} style={INPUT_STYLE} placeholder="Opcional" />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>TELÉFONO</span>
+                  <input value={form.telefono}
+                    onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))}
+                    className={inputCls} style={INPUT_STYLE} placeholder="Opcional" />
+                </label>
+              </>
+            )}
+
+            <label className="block">
+              <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>PLAN</span>
+              <select value={plan} onChange={e => setPlan(e.target.value)}
+                className={inputCls} style={INPUT_STYLE}>
+                {planes.map(p => (
+                  <option key={p.id} value={p.id}>{p.nombre} · {money(precioEn(p))}</option>
+                ))}
+              </select>
+            </label>
 
             <div>
               <span className="text-[10px] tracking-widest" style={{ color: '#8b949e' }}>MÉTODO DE PAGO</span>
@@ -170,7 +242,7 @@ export default function RegistroVisita({ sucursal, onRegistrada }) {
                 placeholder={planActual ? String(precioEn(planActual)) : ''} />
             </label>
 
-            <button type="submit" disabled={guardando || !form.nombre.trim()}
+            <button type="submit" disabled={guardando || (!existente && !form.nombre.trim())}
               className="w-full py-2.5 rounded-lg text-xs font-bold transition-all disabled:opacity-40"
               style={{ backgroundColor: '#22c55e', color: '#0d1117' }}>
               {guardando ? 'Registrando...' : `Cobrar ${money(aCobrar)} y registrar entrada`}

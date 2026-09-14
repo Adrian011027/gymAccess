@@ -1,10 +1,12 @@
 from django.db import models
+from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from .eliminacion import purgar_eliminados
 from .models import Usuario
 from .permissions import ROLES_ADMIN, EsAdminGym
 from .serializers import UsuarioSerializer, LoginSerializer
@@ -27,11 +29,13 @@ class UsuarioViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        # Los dados de baja se ocultan: siguen en la base porque de ellos cuelga la
-        # bitácora (quién autorizó qué), pero no son personal en activo.
-        qs = Usuario.objects.filter(is_active=True)
+        # Un empleado eliminado no existe para el sistema, ni siquiera con
+        # `incluir_bajas`: no se lista, no se consulta y no se edita (404). Su fila
+        # espera 30 días antes de borrarse (usuarios/eliminacion.py).
+        vigentes = Usuario.objects.filter(eliminado_en__isnull=True)
+        qs = vigentes.filter(is_active=True)
         if self.request.query_params.get('incluir_bajas') == '1':
-            qs = Usuario.objects.all()
+            qs = vigentes
         if user.rol == 'superadmin':
             return qs
         qs = qs.filter(gym_id=user.gym_id)
@@ -56,20 +60,32 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             ).distinct()
         return qs
 
+    def _liberar_correo(self, serializer):
+        # El correo de un eliminado sigue ocupando el UNIQUE hasta que se purga: se
+        # purga ya para que el alta o el cambio de correo no choquen con él.
+        email = serializer.validated_data.get('email')
+        if email:
+            purgar_eliminados(email=email)
+
     def perform_create(self, serializer):
+        self._liberar_correo(serializer)
         if self.request.user.rol != 'superadmin':
             serializer.save(gym_id=self.request.user.gym_id)
         else:
             serializer.save()
 
-    def perform_destroy(self, instance):
-        """Baja lógica del empleado.
+    def perform_update(self, serializer):
+        self._liberar_correo(serializer)
+        serializer.save()
 
-        No se borra la fila: `Pago.registrado_por`, `AjusteMembresia.autorizado_por` y
-        `Acceso.autorizado_por` apuntan aquí con SET_NULL, así que un DELETE real
-        dejaría la bitácora sin responsable justo en los movimientos que existen para
-        poder auditar a alguien. Desactivado no puede iniciar sesión, que es el efecto
-        que se busca.
+    def perform_destroy(self, instance):
+        """Eliminación del empleado: inmediata para el sistema, definitiva a los 30 días.
+
+        No se borra la fila en el acto: `Pago.registrado_por`, `Acceso.autorizado_por` y
+        el resto apuntan aquí con SET_NULL, y el mes de margen permite notar un error
+        antes de perder quién registró cada movimiento. Mientras tanto no puede iniciar
+        sesión (is_active) ni aparece en ningún listado (eliminado_en). La purga está en
+        `usuarios/eliminacion.py`.
         """
         usuario = self.request.user
         if instance.id == usuario.id:
@@ -88,7 +104,8 @@ class UsuarioViewSet(viewsets.ModelViewSet):
                                'de darlo de baja.'}
                 )
         instance.is_active = False
-        instance.save(update_fields=['is_active'])
+        instance.eliminado_en = timezone.now()
+        instance.save(update_fields=['is_active', 'eliminado_en'])
 
     def get_permissions(self):
         # Cambiar de sucursal activa es sobre uno mismo, no un endpoint de admin:

@@ -56,6 +56,10 @@ class Usuario(AbstractBaseUser, PermissionsMixin):
     # No se valida contra accesos ni bloquea nada, es solo para que el admin lo consulte.
     horario_semanal = models.JSONField(default=dict, blank=True)
     is_active = models.BooleanField(default=True)
+    # Cuándo se eliminó al empleado. Mientras tanto no existe para el sistema (no entra,
+    # no se lista, no se le asigna nada) y a los 30 días se borra la fila de verdad:
+    # ver `usuarios/eliminacion.py`. Nulo = empleado vigente.
+    eliminado_en = models.DateTimeField(null=True, blank=True)
     is_staff = models.BooleanField(default=False)
     creado_en = models.DateTimeField(auto_now_add=True)
 

@@ -2,6 +2,7 @@ from django.contrib.auth.password_validation import validate_password as validar
 from django.core.exceptions import ValidationError as ValidationErrorDjango
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import Usuario
 from .permissions import ROLES_ADMIN
@@ -65,6 +66,12 @@ class LoginSerializer(TokenObtainPairSerializer):
 
 
 class UsuarioSerializer(serializers.ModelSerializer):
+    # Único solo entre empleados vigentes: el correo de uno eliminado se libera (la
+    # vista purga esa cuenta antes de guardar) en vez de bloquear la recontratación.
+    email = serializers.EmailField(validators=[UniqueValidator(
+        queryset=Usuario.objects.filter(eliminado_en__isnull=True),
+        lookup='iexact', message='Ya existe un usuario con ese correo.',
+    )])
     password = serializers.CharField(write_only=True, required=False)
     sucursal_nombre = serializers.CharField(source='sucursal.nombre', read_only=True)
 

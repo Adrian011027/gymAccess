@@ -77,6 +77,10 @@ const ESTADO_NO_VIGENTE = {
 }
 function motivoSinVigencia(m) {
   if (!m) return null
+  // Semanal o visita acabados: no hay renovación que cobrar, solo falta que pague otro.
+  if (m.renovable === false) return { texto: 'Sin membresía activa', color: '#8b949e' }
+  // Activa, en fechas, pero sin clases: el paquete se gastó.
+  if (m.estado === 'activa' && m.clases_restantes === 0) return { texto: 'Sin clases', color: '#ef4444' }
   // 'activa' sin ser vigente solo puede significar que aún no empieza: `vigentes()`
   // exige además `fecha_inicio <= hoy`.
   if (m.estado === 'activa') return { texto: `Inicia ${m.fecha_inicio}`, color: '#3b82f6' }
@@ -285,7 +289,10 @@ export default function Socios() {
     }
     // El chat se abre DESPUÉS de copiar: `clipboard.write` exige que esta pestaña
     // tenga el foco, y abrir WhatsApp antes se lo quita y la copia falla.
-    window.open(urlWhatsApp(destino.telefono, mensajeQR(qrModal, destino)), '_blank', 'noopener')
+    window.open(
+      urlWhatsApp(destino.telefono, mensajeQR(qrModal, destino, { avisoPendiente: avisoPorAceptar })),
+      '_blank', 'noopener',
+    )
     toast.success(copiado
       ? 'QR copiado: pégalo en el chat con Ctrl + V'
       : 'QR descargado: adjúntalo en el chat')
@@ -376,6 +383,51 @@ export default function Socios() {
       fecha_fin: plan?.duracion_dias ? enDias(plan.duracion_dias) : null,
       estado: 'activa',
     })
+  }
+
+  // Cobrar y activar sin registrar de nuevo: el pago va sobre su última membresía y
+  // el backend la reactiva con días y clases completos (PagoViewSet.perform_create).
+  // Es el camino de quien ya tuvo semanal o visita, que no aparece en "Por cobrar".
+  const [cobrando, setCobrando] = useState(null)
+  const [cobroPlan, setCobroPlan] = useState('')
+  const [cobroMonto, setCobroMonto] = useState('')
+  const [cobroMetodo, setCobroMetodo] = useState('efectivo')
+  const [cobroLoading, setCobroLoading] = useState(false)
+
+  const abrirCobro = s => {
+    setCobrando(s)
+    setCobroPlan(String(s.membresia_reciente.plan_id))
+    setCobroMonto('')
+    setCobroMetodo('efectivo')
+  }
+  const planDelCobro = planes.find(p => String(p.id) === String(cobroPlan))
+  const precioDelCobro = p => {
+    if (!p) return ''
+    const excepcion = (p.precios_sucursal || [])
+      .find(x => String(x.sucursal) === String(cobrando?.membresia_reciente?.sucursal ?? cobrando?.sucursal))
+    return excepcion ? excepcion.precio : p.precio
+  }
+
+  const confirmarCobro = async () => {
+    const m = cobrando.membresia_reciente
+    setCobroLoading(true)
+    try {
+      if (String(cobroPlan) !== String(m.plan_id)) {
+        await api.patch(`/socios/membresias/${m.id}/`, { plan: Number(cobroPlan) })
+      }
+      await api.post('/socios/pagos/', {
+        membresia: m.id,
+        monto: cobroMonto !== '' ? cobroMonto : precioDelCobro(planDelCobro),
+        metodo: cobroMetodo,
+      })
+      toast.success(`${cobrando.nombre}: membresía activada`)
+      setCobrando(null)
+      load()
+    } catch (err) {
+      toast.error(errorDe(err))
+    } finally {
+      setCobroLoading(false)
+    }
   }
 
   const guardarSocio = async () => {
@@ -663,6 +715,11 @@ export default function Socios() {
                         {alerta && (
                           <span className="text-[10px] font-semibold" style={{ color: alerta.color }}>{alerta.texto}</span>
                         )}
+                        {!alerta && s.membresia_activa?.clases_restantes != null && (
+                          <span className="text-[10px]" style={{ color: '#8b949e' }}>
+                            {s.membresia_activa.clases_restantes} clase{s.membresia_activa.clases_restantes === 1 ? '' : 's'} restante{s.membresia_activa.clases_restantes === 1 ? '' : 's'}
+                          </span>
+                        )}
                       </div>
                     ) : (
                       <span className="text-[10px]" style={{ color: '#3d444d' }}>Sin plan</span>
@@ -691,6 +748,13 @@ export default function Socios() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-3">
+                      {s.activo && !s.membresia_activa && s.membresia_reciente && (
+                        <button onClick={() => abrirCobro(s)} title="Cobrar y activar membresía"
+                          className="text-[10px] font-bold px-2 py-1 rounded"
+                          style={{ backgroundColor: 'rgba(34,197,94,0.12)', color: '#22c55e' }}>
+                          $ Cobrar
+                        </button>
+                      )}
                       <button onClick={() => abrirQR(s)} title="Asignar y ver código QR" style={{ color: '#8b949e' }} className="hover:text-white transition-colors">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 4h2m-2 2h6m0-6v2m0 0h-4" />
@@ -1190,6 +1254,65 @@ export default function Socios() {
         </div>
       )}
 
+      {cobrando && (
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-sm my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
+            <h2 className="text-sm font-bold text-white mb-1">Cobrar y activar membresía</h2>
+            <p className="text-xs mb-5" style={{ color: '#8b949e' }}>
+              {cobrando.nombre} {cobrando.apellido} · ya está registrado, no hay que darlo de alta otra vez.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>PLAN</label>
+                <select value={cobroPlan} onChange={e => { setCobroPlan(e.target.value); setCobroMonto('') }}
+                  className="w-full rounded-lg px-3 py-2.5 text-sm mt-1 outline-none" style={INPUT_STYLE}>
+                  {planes.filter(p => p.activo !== false).map(p => (
+                    <option key={p.id} value={p.id}>{p.nombre} · ${precioDelCobro(p)}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>MONTO COBRADO</label>
+                <input type="number" step="0.01" min="0" value={cobroMonto}
+                  placeholder={String(precioDelCobro(planDelCobro) ?? '')}
+                  onChange={e => setCobroMonto(e.target.value)}
+                  className="w-full rounded-lg px-3 py-2.5 text-sm mt-1 outline-none" style={INPUT_STYLE} />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>MÉTODO DE PAGO</label>
+                <div className="flex gap-2 mt-1">
+                  {[['efectivo', 'Efectivo'], ['tarjeta', 'Tarjeta'], ['transferencia', 'Transferencia']].map(([v, l]) => (
+                    <button key={v} type="button" onClick={() => setCobroMetodo(v)}
+                      className="flex-1 py-2 rounded-lg text-[11px] font-semibold transition-all"
+                      style={cobroMetodo === v
+                        ? { backgroundColor: '#22c55e', color: '#0d1117' }
+                        : { backgroundColor: '#0d1117', color: '#8b949e', border: '1px solid #21262d' }}
+                    >{l}</button>
+                  ))}
+                </div>
+              </div>
+              {planDelCobro?.tipo === 'semanal' && (
+                <p className="text-[10px]" style={{ color: '#8b949e' }}>
+                  Semanal: {planDelCobro.num_clases || 5} clases o {planDelCobro.duracion_dias || 7} días, lo que ocurra primero.
+                </p>
+              )}
+            </div>
+            <div className="flex gap-3 pt-5">
+              <button onClick={() => setCobrando(null)}
+                className="flex-1 py-2.5 rounded-lg text-xs font-semibold"
+                style={{ border: '1px solid #21262d', color: '#8b949e', backgroundColor: 'transparent' }}>
+                Cancelar
+              </button>
+              <button onClick={confirmarCobro} disabled={cobroLoading || !cobroPlan}
+                className="flex-1 py-2.5 rounded-lg text-xs font-bold disabled:opacity-50"
+                style={{ backgroundColor: '#22c55e', color: '#0d1117' }}>
+                {cobroLoading ? 'Cobrando...' : 'Cobrar y activar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {qrModal && (
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
           <div className="rounded-2xl p-6 w-full max-w-sm text-center my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
@@ -1351,6 +1474,11 @@ function estadoSocio(s) {
   // Sin membresía nunca es lo mismo que vencido: a uno se le cobra la renovación, al
   // otro le falta el alta. Decir "Vencido" a quien nunca tuvo plan manda a recepción
   // a buscar un pago que no existe.
+  // Semanal y visita no se renuevan: acabados no son "Vencido" (eso manda a cobrar),
+  // son alguien sin membresía activa que vuelve a pagar cuando venga.
+  if (s.membresia_reciente?.renovable === false) {
+    return { clave: 'sin_plan', texto: 'Sin membresía activa', color: '#8b949e' }
+  }
   if (s.membresia_reciente) return { clave: 'vencido', texto: 'Vencido', color: '#f97316' }
   return { clave: 'sin_plan', texto: 'Sin membresía', color: '#8b949e' }
 }

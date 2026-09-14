@@ -31,6 +31,25 @@ class PlanSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError('Sucursal no encontrada.')
         return value
 
+    def validate(self, attrs):
+        def actual(campo):
+            return attrs[campo] if campo in attrs else getattr(self.instance, campo, None)
+
+        tipo = actual('tipo')
+        if tipo == 'semanal':
+            # 5 clases o 7 días, lo que ocurra primero. Vacíos se llenan con eso; más
+            # de 7 días ya no es un semanal y confunde el cobro.
+            dias = actual('duracion_dias') or 7
+            if dias > 7:
+                raise serializers.ValidationError(
+                    {'duracion_dias': 'El plan semanal dura como máximo 7 días.'}
+                )
+            attrs['duracion_dias'] = dias
+            attrs['num_clases'] = actual('num_clases') or 5
+        elif tipo == 'visita':
+            attrs['duracion_dias'] = actual('duracion_dias') or 1
+        return attrs
+
     def create(self, validated_data):
         precios = validated_data.pop('precios_sucursal', [])
         plan = super().create(validated_data)
@@ -184,6 +203,8 @@ class SocioSerializer(serializers.ModelSerializer):
         return {
             'id': m.id, 'plan': m.plan.nombre, 'plan_id': m.plan_id,
             'fecha_fin': m.fecha_fin, 'estado': m.estado,
+            'clases_restantes': m.clases_restantes,
+            'plan_tipo': m.plan.tipo, 'renovable': m.plan.renovable,
         }
 
     def get_membresia_reciente(self, obj):
@@ -196,15 +217,22 @@ class SocioSerializer(serializers.ModelSerializer):
         # `plan_id` además del nombre: la pantalla de edición preselecciona el plan en
         # un <select> y necesita la clave. Casar por nombre se rompe en cuanto dos
         # sucursales tengan un plan que se llame igual.
+        # `renovable`: a un semanal o una visita que se acabó no se le cobra una
+        # renovación; el listado lo muestra como "Sin membresía activa".
         return {
             'id': m.id, 'plan': m.plan.nombre, 'plan_id': m.plan_id,
             'fecha_inicio': m.fecha_inicio, 'fecha_fin': m.fecha_fin, 'estado': m.estado,
+            'clases_restantes': m.clases_restantes,
+            'plan_tipo': m.plan.tipo, 'renovable': m.plan.renovable,
         }
 
 
 class MembresiaSerializer(serializers.ModelSerializer):
     socio_nombre = serializers.CharField(source='socio.__str__', read_only=True)
     plan_nombre = serializers.CharField(source='plan.nombre', read_only=True)
+    plan_tipo = serializers.CharField(source='plan.tipo', read_only=True)
+    # Pagos y Dashboard dejan fuera de "por cobrar" lo que no se renueva.
+    plan_renovable = serializers.BooleanField(source='plan.renovable', read_only=True)
     # Precio efectivo de ESTA sucursal, no el base del plan: si el gym cobra distinto
     # por local (Plan.precio_en), lo que se prefirma en Pagos tiene que ser lo que
     # corresponde a la sucursal de la membresía, no el precio de la matriz.

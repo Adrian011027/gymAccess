@@ -103,6 +103,7 @@ export default function CheckIn() {
         socio: d?.socio,
         motivo: d?.error || d?.motivo || 'Error de conexión',
         sucursal_socio: d?.sucursal_socio,
+        ya_entro_hoy: d?.ya_entro_hoy,
       })
     } finally {
       setLoading(false)
@@ -172,7 +173,7 @@ export default function CheckIn() {
               const el = document.activeElement
               if (!el || el === document.body) inputRef.current?.focus()
             }, 100)}
-            placeholder="ESCANEA EL QR O TECLEA EL N° DE SOCIO"
+            placeholder="Escanea el QR"
             autoComplete="off"
             className="w-full text-center text-lg sm:text-2xl font-black tracking-widest rounded-xl px-4 py-4 sm:py-5 outline-none text-white placeholder:text-[#3d444d]"
             style={{ backgroundColor: '#0d1117', border: '2px solid #21262d', caretColor: '#22c55e' }}
@@ -299,6 +300,13 @@ export default function CheckIn() {
                 <div className="mt-3 text-sm space-y-1" style={{ color: '#8b949e' }}>
                   <p>Plan: <span className="text-white font-semibold">{result.plan}</span></p>
                   <p>Vence: <span className="text-white font-semibold">{result.vence ?? 'Sin fecha límite'}</span></p>
+                  {/* Planes con clases contadas (semanal, paquete): la entrada ya gastó
+                      una, y lo que queda es lo que el socio pregunta en la puerta. */}
+                  {result.clases_restantes != null && (
+                    <p>Clases restantes: <span className="font-semibold" style={{ color: result.clases_restantes === 0 ? '#f97316' : '#fff' }}>
+                      {result.clases_restantes}{result.clases_restantes === 0 ? ' (era la última)' : ''}
+                    </span></p>
+                  )}
                   {result.visitante && (
                     <p style={{ color: '#f97316' }}>
                       Visita de <span className="font-semibold">{result.sucursal_socio}</span>
@@ -312,6 +320,13 @@ export default function CheckIn() {
                   {result.sucursal_socio && (
                     <p className="text-xs mt-1" style={{ color: '#8b949e' }}>
                       Pertenece a {result.sucursal_socio}
+                    </p>
+                  )}
+                  {/* Va debajo de "otra sucursal", no en su lugar: lo primero que
+                      recepción necesita saber es de dónde es. */}
+                  {result.ya_entro_hoy && (
+                    <p className="text-xs mt-2 font-semibold" style={{ color: '#ef4444' }}>
+                      Además, ya registró su entrada hoy: no puede entrar dos veces el mismo día.
                     </p>
                   )}
                 </>

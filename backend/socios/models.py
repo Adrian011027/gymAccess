@@ -275,6 +275,34 @@ class Membresia(models.Model):
     def __str__(self):
         return f'{self.socio} - {self.plan} ({self.estado})'
 
+    def ajustar_a_plan(self, plan, hoy=None):
+        """Aplica las reglas del plan nuevo al cambiar de plan, sin regalar nada.
+
+        Cambiar de plan no es cobrar, así que solo puede recortar:
+        - clases: las del plan nuevo, pero nunca más de las que ya le quedaban; un plan
+          sin clases contadas quita el tope;
+        - fecha (semanal, visita): su período cuenta desde hoy y nunca pasa del fin que
+          ya tenía pagado. De un mensual al 19 a un semanal hoy 14: fin el 19, 5 clases.
+        Los planes que se renuevan conservan sus fechas, como siempre: alargar la
+        vigencia tiene su propio camino con contraseña (`ajustar-vencimiento`).
+        No guarda; devuelve la lista de campos tocados.
+        """
+        hoy = hoy or timezone.localdate()
+        self.plan = plan
+        campos = ['plan']
+        if plan.num_clases:
+            actuales = self.clases_restantes
+            self.clases_restantes = plan.num_clases if actuales is None else min(actuales, plan.num_clases)
+        else:
+            self.clases_restantes = None
+        campos.append('clases_restantes')
+        if not plan.renovable:
+            tope = plan.fecha_fin_desde(max(self.fecha_inicio, hoy))
+            if tope is not None:
+                self.fecha_fin = tope if self.fecha_fin is None else min(self.fecha_fin, tope)
+                campos.append('fecha_fin')
+        return campos
+
 
 class Pago(models.Model):
     METODO_CHOICES = [

@@ -193,6 +193,69 @@ class VolverAPagarTests(PlanesBase):
         self.assertEqual(resp.data['fecha_fin'], str(HOY() + timedelta(days=6)))
 
 
+class CambiarDePlanTests(PlanesBase):
+    """Cambiar el plan de una membresía aplica las reglas del nuevo sin regalar nada."""
+
+    def cambiar(self, membresia, plan):
+        resp = self.client.patch(
+            f'/api/socios/membresias/{membresia.id}/', {'plan': plan.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        membresia.refresh_from_db()
+        return membresia
+
+    def test_mensual_activo_a_semanal_toma_clases_y_no_pasa_de_lo_pagado(self):
+        """El caso real: mensual del 20 al 19, cambiado a semanal a mitad de mes."""
+        m = self.membresia(self.mensual, inicio=HOY() - timedelta(days=25))
+        fin_pagado = m.fecha_fin
+
+        m = self.cambiar(m, self.semanal)
+
+        self.assertEqual(m.clases_restantes, 5)
+        self.assertEqual(m.fecha_fin, min(fin_pagado, HOY() + timedelta(days=6)))
+
+    def test_a_semanal_con_mucho_mes_por_delante_queda_en_7_dias(self):
+        m = self.membresia(self.mensual, inicio=HOY() - timedelta(days=2))
+
+        m = self.cambiar(m, self.semanal)
+
+        self.assertEqual(m.fecha_fin, HOY() + timedelta(days=6))
+
+    def test_nunca_alarga_la_fecha_pagada(self):
+        m = self.membresia(self.mensual, inicio=HOY() - timedelta(days=28))
+        fin_pagado = m.fecha_fin
+
+        m = self.cambiar(m, self.semanal)
+
+        self.assertEqual(m.fecha_fin, fin_pagado)
+
+    def test_no_sube_las_clases_que_ya_le_quedaban(self):
+        paquete = Plan.objects.create(
+            gym=self.gym, nombre='10 clases', tipo='clases', precio=Decimal('800'), num_clases=10,
+        )
+        m = self.membresia(self.semanal, clases_restantes=2)
+
+        m = self.cambiar(m, paquete)
+
+        self.assertEqual(m.clases_restantes, 2)
+
+    def test_a_un_plan_sin_clases_se_quita_el_tope(self):
+        m = self.membresia(self.semanal, clases_restantes=3)
+
+        m = self.cambiar(m, self.mensual)
+
+        self.assertIsNone(m.clases_restantes)
+
+    def test_editar_sin_cambiar_de_plan_no_toca_clases_ni_fechas(self):
+        m = self.membresia(self.semanal, clases_restantes=3)
+        fin = m.fecha_fin
+
+        self.client.patch(f'/api/socios/membresias/{m.id}/', {'estado': 'activa'}, format='json')
+
+        m.refresh_from_db()
+        self.assertEqual((m.clases_restantes, m.fecha_fin), (3, fin))
+
+
 class VisitaDeQuienYaVinoTests(PlanesBase):
     def registrar(self, **extra):
         cuerpo = {'plan': self.visita.id, 'sucursal': self.sucursal.id, 'metodo': 'efectivo'}

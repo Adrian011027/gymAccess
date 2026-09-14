@@ -416,7 +416,19 @@ class MembresiaViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         self._validar_pertenencia(serializer)
-        serializer.save()
+        nuevo = serializer.validated_data.get('plan')
+        membresia = serializer.save()
+        # Cambiar a semanal un mensual activo dejaba el nombre nuevo con los 30 días y
+        # sin tope de clases del plan anterior. `ajustar_a_plan` aplica las reglas del
+        # plan nuevo recortando, nunca alargando.
+        if nuevo is not None and nuevo.id != serializer.instance.plan_id_anterior:
+            membresia.save(update_fields=membresia.ajustar_a_plan(nuevo))
+
+    def get_object(self):
+        obj = super().get_object()
+        # El plan antes del PATCH: `serializer.save()` ya lo sobrescribe en la instancia.
+        obj.plan_id_anterior = obj.plan_id
+        return obj
 
     def get_throttles(self):
         # El ajuste verifica contraseñas: sin un límite propio se vuelve un banco de

@@ -17,6 +17,7 @@ from rest_framework import status
 from accesos.models import Acceso, MetodoAcceso
 from gyms.models import Sucursal
 from gyms.tests import BaseAPITestCase
+from legal.models import ConsentimientoSocio, DocumentoLegal
 from socios.models import Membresia, Plan, Socio
 
 URL = '/api/accesos/checkin/'
@@ -368,6 +369,90 @@ class QRPaginaPublicaTests(CodigoCortoBase):
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         self.assertTrue(resp.data['pagina_url'].endswith(f"/api/accesos/qr/{resp.data['token']}/"))
         self.assertTrue(resp.data['imagen_url'].endswith(f"/api/accesos/qr/{resp.data['token']}.png"))
+
+
+class QRPaginaConAvisoTests(CodigoCortoBase):
+    """El QR que llega por el chat no se entrega sin aceptar el aviso de privacidad.
+
+    El alta ya no exige marcar la casilla en mostrador, así que este enlace es por
+    donde el socio acepta después. Si la página mostrara el QR de todos modos, el
+    socio tendría su credencial sin haber consentido nada y el "Sin consentimiento"
+    del listado no se cerraría nunca.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.aviso = DocumentoLegal.objects.create(
+            gym=self.gym, tipo=DocumentoLegal.AVISO_PRIVACIDAD, version='1.0',
+            titulo='Aviso de privacidad', contenido='# Aviso\n\nTratamos tus datos para darte acceso.',
+        )
+        self.url = '/api/accesos/qr/TOKEN-ANA/'
+
+    def test_sin_aceptar_muestra_el_aviso_y_no_el_qr(self):
+        resp = self.client_class().get(self.url)
+        html = resp.content.decode()
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn('Acepto el aviso de privacidad', html)
+        self.assertNotIn('TOKEN-ANA.png', html)
+
+    def test_sin_aceptar_whatsapp_no_previsualiza_el_qr(self):
+        """La miniatura del chat también es el QR: con ella el aviso sobraría."""
+        html = self.client_class().get(self.url).content.decode()
+
+        self.assertNotIn('og:image', html)
+
+    def test_aceptar_registra_el_consentimiento_digital_y_vuelve_a_la_pagina(self):
+        resp = self.client_class().post(self.url)
+
+        self.assertEqual(resp.status_code, status.HTTP_302_FOUND)
+        self.assertEqual(resp['Location'], self.url)
+        consentimiento = ConsentimientoSocio.objects.get(socio=self.socio, documento=self.aviso)
+        self.assertEqual(consentimiento.medio, 'digital')
+        self.assertEqual(consentimiento.otorgado_por, 'socio')
+
+    def test_tras_aceptar_se_ve_el_qr(self):
+        cliente = self.client_class()
+        cliente.post(self.url)
+
+        html = cliente.get(self.url).content.decode()
+
+        self.assertIn('TOKEN-ANA.png', html)
+        self.assertNotIn('Acepto el aviso de privacidad', html)
+
+    def test_aceptar_dos_veces_no_duplica_la_evidencia(self):
+        cliente = self.client_class()
+        cliente.post(self.url)
+        cliente.post(self.url)
+
+        self.assertEqual(ConsentimientoSocio.objects.filter(socio=self.socio).count(), 1)
+
+    def test_aceptado_en_mostrador_va_directo_al_qr(self):
+        ConsentimientoSocio.objects.create(socio=self.socio, documento=self.aviso)
+
+        html = self.client_class().get(self.url).content.decode()
+
+        self.assertIn('TOKEN-ANA.png', html)
+
+    def test_version_nueva_del_aviso_se_vuelve_a_pedir(self):
+        ConsentimientoSocio.objects.create(socio=self.socio, documento=self.aviso)
+        DocumentoLegal.objects.create(
+            gym=self.gym, tipo=DocumentoLegal.AVISO_PRIVACIDAD, version='2.0',
+            titulo='Aviso de privacidad', contenido='# Aviso\n\nVersión nueva.',
+        )
+
+        html = self.client_class().get(self.url).content.decode()
+
+        self.assertIn('Acepto el aviso de privacidad', html)
+        self.assertNotIn('TOKEN-ANA.png', html)
+
+    def test_qr_revocado_no_acepta_nada(self):
+        MetodoAcceso.objects.filter(token='TOKEN-ANA').update(activo=False)
+
+        resp = self.client_class().post(self.url)
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(ConsentimientoSocio.objects.filter(socio=self.socio).exists())
 
 
 class QRBaseURLTests(CodigoCortoBase):

@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
 import SucursalSelector from '../components/SucursalSelector'
 import {
-  destinatarioWhatsApp, mensajeQR, urlPublicaDelQR, urlWhatsApp,
+  avisoPendiente, destinatarioWhatsApp, mensajeQR, urlPublicaDelQR, urlWhatsApp,
 } from '../lib/whatsappQR'
 import { enDias, fechaLocal } from '../lib/fechas'
 import Markdown from '../components/Markdown'
@@ -167,6 +167,7 @@ export default function Socios() {
 
   const destinoWhatsApp = destinatarioWhatsApp(qrModal)
   const enlaceQR = urlPublicaDelQR(qrModal?.qr_pagina_url)
+  const avisoPorAceptar = avisoPendiente(qrModal, aviso)
 
   const imprimirQR = () => {
     // Se imprime el nodo del QR tal cual: abrir una ventana con el SVG serializado
@@ -258,6 +259,17 @@ export default function Socios() {
   const enviarQRPorWhatsApp = async () => {
     const destino = destinatarioWhatsApp(qrModal)
     if (!destino) return
+    // Con el aviso sin aceptar se manda solo el enlace, que abre el aviso antes del QR.
+    // Copiar la imagen aquí dejaría a recepción pegarla en el chat y el socio tendría
+    // su QR sin haber aceptado nada: justo el hueco que la página del QR cierra.
+    if (avisoPorAceptar && enlaceQR) {
+      window.open(
+        urlWhatsApp(destino.telefono, mensajeQR(qrModal, destino, { avisoPendiente: true })),
+        '_blank', 'noopener',
+      )
+      toast.success('Enlace listo: el socio verá su QR al aceptar el aviso')
+      return
+    }
     let copiado = false
     try {
       // Se le pasa la promesa, no el PNG ya resuelto: `clipboard.write` tiene que
@@ -1240,7 +1252,13 @@ export default function Socios() {
                         · +{destinoWhatsApp.telefono}.{' '}
                         {/* Se distingue el caso porque el trabajo que le queda a
                             recepción es distinto: con enlace, ninguno; sin él, pegar. */}
-                        {enlaceQR ? (
+                        {enlaceQR && avisoPorAceptar ? (
+                          <>
+                            El mensaje lleva un <span className="text-white font-semibold">enlace</span>:
+                            el socio acepta el aviso de privacidad y ahí ve su QR, así que basta con
+                            enviarlo. La imagen no se copia para que el aviso no se salte.
+                          </>
+                        ) : enlaceQR ? (
                           <>
                             El mensaje lleva un <span className="text-white font-semibold">enlace</span> que
                             el socio pulsa para ver su QR, así que basta con enviarlo. La imagen también
@@ -1250,6 +1268,14 @@ export default function Socios() {
                           <>
                             El QR queda copiado: pégalo con{' '}
                             <span className="text-white font-semibold">Ctrl + V</span> y envía.
+                            {/* Sin enlace no hay página que pida el aviso: no se bloquea el
+                                envío, pero recepción tiene que saber que queda pendiente. */}
+                            {avisoPorAceptar && (
+                              <span className="block mt-1 font-semibold" style={{ color: '#f97316' }}>
+                                Este socio no ha aceptado el aviso de privacidad. Sin enlace no puede
+                                aceptarlo desde el chat: pídeselo en mostrador.
+                              </span>
+                            )}
                             <span className="block mt-1" style={{ color: '#3d444d' }}>
                               El enlace a la imagen se manda solo cuando el sistema corre en un
                               dominio público; en local no se incluye porque el teléfono del socio

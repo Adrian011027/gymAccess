@@ -57,14 +57,37 @@ export function urlPublicaDelQR(url) {
   }
 }
 
-export function mensajeQR(socio, destino) {
+// Si al socio le falta aceptar el aviso de privacidad vigente. Es la misma regla que
+// aplica la página del QR en el backend (`QRPaginaView._aviso_pendiente`): un
+// consentimiento de una versión anterior no cuenta. Sin aviso publicado no hay nada
+// que aceptar.
+export function avisoPendiente(socio, aviso) {
+  if (!socio || !aviso) return false
+  return socio.consentimiento?.version !== aviso.version
+}
+
+export function mensajeQR(socio, destino, { avisoPendiente: pendiente = false } = {}) {
   const donde = socio.sucursal_nombre ? ` de ${socio.sucursal_nombre}` : ''
+  const pagina = urlPublicaDelQR(socio.qr_pagina_url)
+  // Con el aviso sin aceptar, el enlace abre primero el aviso y el QR sale después de
+  // aceptarlo. El mensaje lo dice de entrada: si promete "tu código QR" y lo primero
+  // que aparece es un texto legal, el socio cree que le mandaron otra cosa y lo cierra.
+  if (pendiente && pagina) {
+    const cuerpo = destino.esTutor
+      ? `Hola, para ver el código QR de acceso de ${socio.nombre} ${socio.apellido} al gimnasio${donde} `
+        + 'primero hay que aceptar nuestro aviso de privacidad.'
+      : `Hola ${socio.nombre.split(' ')[0]}, para ver tu código QR de acceso al gimnasio${donde} `
+        + 'primero necesitamos que aceptes nuestro aviso de privacidad.'
+    return [
+      cuerpo,
+      `\nAceptar el aviso y ver ${destino.esTutor ? 'su' : 'tu'} código QR: ${pagina}`,
+    ].join('\n')
+  }
   const cuerpo = destino.esTutor
     ? `Hola, te comparto el código QR de acceso de ${socio.nombre} ${socio.apellido} al gimnasio${donde}. `
       + 'Con él registra su entrada.'
     : `Hola ${socio.nombre.split(' ')[0]}, te comparto tu código QR de acceso al gimnasio${donde}. `
       + 'Muéstralo en la entrada para registrar tu acceso.'
-  const pagina = urlPublicaDelQR(socio.qr_pagina_url)
   // Con enlace se manda el enlace y nada más: el socio pulsa y ve su QR. El texto del
   // código solo va cuando NO hay enlace, porque entonces es lo único que le queda; de
   // otro modo sería pedirle que teclee una cadena de 30 caracteres en la puerta.

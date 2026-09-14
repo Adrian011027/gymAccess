@@ -19,7 +19,8 @@ class Plan(models.Model):
     # Planes de uso suelto: quien los compra no se compromete a volver. Cuando se
     # acaban no son un cobro atrasado —no salen en "Por cobrar", no notifican "pago
     # vencido"—, el socio simplemente queda sin membresía activa hasta que pague otro.
-    TIPOS_SIN_RENOVACION = ('semanal', 'visita')
+    # El paquete de clases entra aquí: se compra cuando se necesita, no es mensualidad.
+    TIPOS_SIN_RENOVACION = ('semanal', 'visita', 'clases')
 
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='planes')
     nombre = models.CharField(max_length=100)

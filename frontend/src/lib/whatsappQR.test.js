@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  destinatarioWhatsApp, mensajeQR, telefonoWhatsApp, urlPublicaDelQR, urlWhatsApp,
+  avisoPendiente, destinatarioWhatsApp, mensajeQR, telefonoWhatsApp, urlPublicaDelQR, urlWhatsApp,
 } from './whatsappQR'
 
 const socioBase = {
@@ -185,6 +185,59 @@ describe('mensajeQR', () => {
   it('omite la sucursal si el socio no tiene una asignada', () => {
     const socio = { ...socioBase, sucursal_nombre: null, qr_pagina_url: publica }
     expect(mensajeQR(socio, destinatarioWhatsApp(socio))).toContain('al gimnasio.')
+  })
+
+  it('con el aviso pendiente avisa que primero hay que aceptarlo', () => {
+    // El enlace abre el aviso antes que el QR: si el mensaje prometiera solo el QR, el
+    // socio vería un texto legal y creería que le mandaron otra cosa.
+    const socio = { ...socioBase, qr_pagina_url: publica }
+    const texto = mensajeQR(socio, destinatarioWhatsApp(socio), { avisoPendiente: true })
+
+    expect(texto).toContain('aceptes nuestro aviso de privacidad')
+    expect(texto.split('\n')).toContain(`Aceptar el aviso y ver tu código QR: ${publica}`)
+    expect(texto).not.toContain('Código: R3B-QR')
+  })
+
+  it('con el aviso pendiente al tutor también se le habla en tercera persona', () => {
+    const socio = {
+      ...socioBase, telefono: '', tutor_telefono: '3312345678', qr_pagina_url: publica,
+    }
+    const texto = mensajeQR(socio, destinatarioWhatsApp(socio), { avisoPendiente: true })
+
+    expect(texto).toContain('el código QR de acceso de Jose Sanchez')
+    expect(texto).toContain('Aceptar el aviso y ver su código QR:')
+  })
+
+  it('sin enlace público el aviso pendiente no cambia nada: solo queda el código', () => {
+    const socio = { ...socioBase, qr_pagina_url: 'http://localhost:8001/api/accesos/qr/T/' }
+    const texto = mensajeQR(socio, destinatarioWhatsApp(socio), { avisoPendiente: true })
+
+    expect(texto).toContain('Código: R3B-QR-00030-N87LmCpAxTZCT0Hj')
+    expect(texto).not.toContain('aviso')
+  })
+})
+
+describe('avisoPendiente', () => {
+  const aviso = { version: '2.0' }
+
+  it('sin aviso publicado no hay nada que aceptar', () => {
+    expect(avisoPendiente({ ...socioBase, consentimiento: null }, undefined)).toBe(false)
+  })
+
+  it('socio que nunca aceptó tiene el aviso pendiente', () => {
+    expect(avisoPendiente({ ...socioBase, consentimiento: null }, aviso)).toBe(true)
+  })
+
+  it('socio que aceptó la versión vigente ya no lo tiene pendiente', () => {
+    expect(avisoPendiente({ ...socioBase, consentimiento: { version: '2.0' } }, aviso)).toBe(false)
+  })
+
+  it('aceptar una versión anterior no cuenta, igual que en el backend', () => {
+    expect(avisoPendiente({ ...socioBase, consentimiento: { version: '1.0' } }, aviso)).toBe(true)
+  })
+
+  it('no revienta sin socio', () => {
+    expect(avisoPendiente(null, aviso)).toBe(false)
   })
 })
 

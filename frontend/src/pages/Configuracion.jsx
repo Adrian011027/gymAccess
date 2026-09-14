@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import api from '../api/axios'
 
@@ -88,8 +89,18 @@ function formatearHorario(h) {
     .join(' · ')
 }
 
+// Lo que el aviso de privacidad no puede omitir (backend/legal/aviso.py). Se revisa
+// sobre lo guardado y no sobre el formulario: el aviso se genera con lo que tiene el
+// servidor, y una palomita por algo escrito sin guardar sería mentira.
+const DATOS_AVISO = [
+  ['razon_social', 'Razón social'],
+  ['direccion', 'Dirección'],
+  ['telefono', 'Teléfono'],
+  ['email_contacto', 'Correo electrónico'],
+]
+
 export default function Configuracion() {
-  const [gym, setGym] = useState({ nombre: '', direccion: '', telefono: '', email: '' })
+  const [gym, setGym] = useState({ nombre: '', razon_social: '', direccion: '', telefono: '', email: '' })
   const [horario, setHorario] = useState(horarioDefault())
   const [guardandoGym, setGuardandoGym] = useState(false)
 
@@ -142,6 +153,7 @@ export default function Configuracion() {
     try {
       const { data } = await api.patch(`/gyms/${gymReal.id}/`, {
         nombre: gym.nombre,
+        razon_social: gym.razon_social,
         direccion: gym.direccion,
         telefono: gym.telefono,
         email_contacto: gym.email,
@@ -205,6 +217,7 @@ export default function Configuracion() {
     // a mano, así que la pantalla mostraba datos de otro negocio.
     setGym({
       nombre: g.nombre || '',
+      razon_social: g.razon_social || '',
       direccion: g.direccion || '',
       telefono: g.telefono || '',
       email: g.email_contacto || '',
@@ -306,6 +319,7 @@ export default function Configuracion() {
           <form onSubmit={guardar} className="space-y-4">
             {[
               { key: 'nombre', label: 'NOMBRE DEL NEGOCIO', icon: 'M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z' },
+              { key: 'razon_social', label: 'RAZÓN SOCIAL', placeholder: 'Nombre legal ante el SAT', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
               { key: 'direccion', label: 'DIRECCIÓN', icon: 'M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z' },
               { key: 'telefono', label: 'TELÉFONO', icon: 'M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z' },
               { key: 'email', label: 'CORREO ELECTRÓNICO', icon: 'M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z' },
@@ -318,6 +332,7 @@ export default function Configuracion() {
                   </svg>
                   <input
                     value={gym[f.key]}
+                    placeholder={f.placeholder}
                     onChange={e => setGym(g => ({ ...g, [f.key]: e.target.value }))}
                     className="bg-transparent text-white text-sm w-full outline-none"
                   />
@@ -339,6 +354,30 @@ export default function Configuracion() {
               {guardandoGym ? 'Guardando...' : 'Guardar cambios'}
             </button>
           </form>
+
+          {/* El aviso de privacidad se genera con estos datos: se dice aquí, donde se
+              capturan, y no solo en Legal, donde ya no hay dónde corregirlos. */}
+          <div className="mt-5 rounded-lg p-4" style={{ backgroundColor: '#0d1117', border: '1px solid #21262d' }}>
+            <p className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>AVISO DE PRIVACIDAD</p>
+            <p className="text-[10px] mt-1 leading-relaxed" style={{ color: '#8b949e' }}>
+              Tu aviso se genera con estos datos: la ley pide que diga quién responde por los
+              datos de tus socios y cómo contactarlo. La razón social es el nombre legal
+              (persona física o moral), que puede no ser el nombre del negocio.
+            </p>
+            <ul className="mt-3 grid grid-cols-2 gap-1.5">
+              {DATOS_AVISO.map(([campo, etiqueta]) => {
+                const listo = !!String(gymReal?.[campo] || '').trim()
+                return (
+                  <li key={campo} className="text-[11px] font-semibold" style={{ color: listo ? '#22c55e' : '#ef4444' }}>
+                    {listo ? '✓' : '✗'} {etiqueta}
+                  </li>
+                )
+              })}
+            </ul>
+            <Link to="/legal" className="inline-block mt-3 text-[11px] font-bold underline" style={{ color: '#22c55e' }}>
+              Generar y publicar el aviso en Legal →
+            </Link>
+          </div>
         </div>
 
         {/* Right column */}

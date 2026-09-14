@@ -91,6 +91,44 @@ class DocumentoLegalViewSet(viewsets.ModelViewSet):
             salida[tipo] = DocumentoLegalSerializer(doc).data if doc else None
         return Response(salida)
 
+    @action(detail=False, methods=['get'], url_path='plantilla-aviso')
+    def plantilla_aviso(self, request):
+        """El aviso de privacidad llenado con los datos del gym, listo para revisar.
+
+        No publica nada: devuelve el borrador para el modal de Legal, donde el admin
+        lo lee y pulsa publicar con el POST de siempre. Publicar sin que nadie lo
+        lea dejaría a los socios aceptando un texto que el propio dueño no vio.
+        """
+        from django.utils import timezone
+        from gyms.models import Gym
+        from usuarios.permissions import ROLES_ADMIN
+        from .aviso import datos_faltantes, generar_aviso, version_sugerida
+
+        if request.user.rol not in ROLES_ADMIN:
+            return Response(
+                {'error': 'Solo el administrador del gimnasio publica el aviso.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        gym = Gym.objects.filter(id=request.user.gym_id).first()
+        if gym is None:
+            return Response(
+                {'error': 'Tu usuario no tiene un gimnasio asignado.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        faltantes = datos_faltantes(gym)
+        if faltantes:
+            return Response(
+                {'error': 'Faltan datos del gimnasio para generar el aviso.', 'faltantes': faltantes},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        version = version_sugerida(gym)
+        return Response({
+            'version': version,
+            'titulo': 'Aviso de Privacidad',
+            'contenido': generar_aviso(gym, version),
+            'vigente_desde': timezone.localdate(),
+        })
+
 
 class PendientesAceptarView(APIView):
     """Documentos del proveedor que este usuario todavía no acepta.

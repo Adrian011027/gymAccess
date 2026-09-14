@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import api from '../api/axios'
 import Markdown from '../components/Markdown'
@@ -47,6 +48,8 @@ export default function Legal() {
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState(FORM_VACIO)
   const [guardando, setGuardando] = useState(false)
+  const [generando, setGenerando] = useState(false)
+  const [faltantes, setFaltantes] = useState([])
   const [error, setError] = useState('')
 
   const cargar = () => {
@@ -62,6 +65,24 @@ export default function Legal() {
     return 'No se pudo publicar'
   }
 
+  // Llena el formulario con la plantilla y los datos del gym. No publica: el admin
+  // lo lee en el modal y pulsa Publicar, como con un texto escrito a mano.
+  const generarDesdeGym = async () => {
+    setGenerando(true)
+    setError('')
+    setFaltantes([])
+    try {
+      const { data } = await api.get('/legal/documentos/plantilla-aviso/')
+      setForm(f => ({ ...f, version: data.version, titulo: data.titulo, contenido: data.contenido }))
+    } catch (err) {
+      const d = err.response?.data
+      if (d?.faltantes) setFaltantes(d.faltantes)
+      else setError(d?.error || errorDe(err))
+    } finally {
+      setGenerando(false)
+    }
+  }
+
   const abrirNuevaVersion = () => {
     const actual = vigentes?.[AVISO]
     setForm({
@@ -73,7 +94,10 @@ export default function Legal() {
       vigente_desde: new Date().toISOString().slice(0, 10),
     })
     setError('')
+    setFaltantes([])
     setModal(true)
+    // El primer aviso no tiene de dónde partir: se propone el de la plantilla.
+    if (!actual) generarDesdeGym()
   }
 
   const publicar = async e => {
@@ -214,13 +238,29 @@ export default function Legal() {
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
           <div className="rounded-2xl p-6 w-full max-w-2xl my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
             <h2 className="text-sm font-bold text-white mb-1">Publicar aviso de privacidad</h2>
-            <p className="text-[10px] mb-5 leading-relaxed" style={{ color: '#8b949e' }}>
+            <p className="text-[10px] mb-3 leading-relaxed" style={{ color: '#8b949e' }}>
               Se crea una versión nueva; la anterior se conserva porque los
-              consentimientos ya firmados apuntan a ella. Hay un borrador listo para
-              copiar en{' '}
-              <code className="font-mono" style={{ color: '#22c55e' }}>legal/aviso-privacidad.md</code>
-              {' '}del proyecto. Revísalo con un abogado antes de publicarlo.
+              consentimientos ya firmados apuntan a ella. El texto se puede generar con la
+              plantilla y los datos de tu gym. Revísalo con un abogado antes de publicarlo.
             </p>
+            <button type="button" onClick={generarDesdeGym} disabled={generando}
+              className="w-full mb-4 py-2.5 rounded-lg text-xs font-bold disabled:opacity-50"
+              style={{ border: '1px solid rgba(34,197,94,0.4)', color: '#22c55e', backgroundColor: 'rgba(34,197,94,0.08)' }}>
+              {generando ? 'Generando...' : 'Generar con los datos del gym'}
+            </button>
+            {faltantes.length > 0 && (
+              <div className="mb-4 rounded-lg p-3" style={{ backgroundColor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)' }}>
+                <p className="text-[11px] font-bold" style={{ color: '#ef4444' }}>
+                  Faltan datos del gym para generar el aviso:
+                </p>
+                <p className="text-[11px] mt-1" style={{ color: '#8b949e' }}>
+                  {faltantes.map(f => f.etiqueta).join(', ')}.{' '}
+                  <Link to="/configuracion" className="font-bold underline" style={{ color: '#22c55e' }}>
+                    Complétalos en Configuración
+                  </Link>
+                </p>
+              </div>
+            )}
             <form onSubmit={publicar} className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>

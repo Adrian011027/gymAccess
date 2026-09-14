@@ -82,12 +82,15 @@ export default function Pagos() {
   const hoy = hoyLocal()
   const semana = enDias(7)
 
-  const pendientes = membresias.filter(m => m.estado !== 'activa' || m.fecha_fin <= semana)
+  // Semanal y visita no se renuevan: cuando se acaban no son un cobro pendiente, el
+  // socio solo queda sin membresía activa hasta que vuelva a pagar desde Socios.
+  const cobrables = membresias.filter(m => m.plan_renovable !== false)
+  const pendientes = cobrables.filter(m => m.estado !== 'activa' || m.fecha_fin <= semana)
   const pendHoy    = pendientes.filter(m => m.fecha_fin === hoy || m.estado === 'pendiente_pago')
   const pendSem    = pendientes.filter(m => m.fecha_fin > hoy && m.fecha_fin <= semana)
   // Si la fecha ya pasó la membresía está atrasada, sin importar el estado guardado:
   // una que quedó marcada 'activa' con fecha vencida es justo la que hay que cobrar.
-  const atrasados  = membresias.filter(m => m.fecha_fin && m.fecha_fin < hoy)
+  const atrasados  = cobrables.filter(m => m.fecha_fin && m.fecha_fin < hoy)
   // Todo lo cobrable en una sola lista, sin repetir (un atrasado tambien cae en
   // pendHoy si quedo en 'pendiente_pago'). Es la vista por defecto: con "Hoy"
   // primero, un socio atrasado desde hace semanas no aparecia hasta que alguien

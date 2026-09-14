@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import qrcode
 from django.db import models, transaction
-from django.db.models import Count
+from django.db.models import Count, F
 from django.db.models.functions import ExtractHour
 from django.http import HttpResponse, HttpResponseRedirect
 from django.urls import reverse
@@ -305,8 +305,15 @@ class CheckInView(APIView):
         membresia = Membresia.objects.vigentes().filter(socio=socio).first()
 
         if not membresia:
-            tiene_historial = Membresia.objects.filter(socio=socio).exists()
-            motivo = 'membresia_vencida' if tiene_historial else 'sin_membresia'
+            ultima = (
+                Membresia.objects.filter(socio=socio).select_related('plan')
+                .order_by('-fecha_inicio', '-id').first()
+            )
+            # Un semanal o una visita que se acabó no es un pago atrasado: nadie espera
+            # que renueve. Se registra como "sin membresía" y no se avisa "pago
+            # vencido", o recepción saldría a cobrarle algo que nunca contrató.
+            renovable = ultima is not None and ultima.plan.renovable
+            motivo = 'membresia_vencida' if renovable else 'sin_membresia'
             Acceso.objects.create(
                 socio=socio,
                 sucursal=sucursal,
@@ -324,7 +331,7 @@ class CheckInView(APIView):
             return Response({
                 'acceso': 'denegado',
                 'socio': f'{socio.nombre} {socio.apellido}',
-                'motivo': 'membresía no activa',
+                'motivo': 'membresía no activa' if renovable else 'no tiene membresía activa',
             }, status=status.HTTP_403_FORBIDDEN)
 
         # Un código solo abre la puerta una vez por día. Sin este límite, dos personas
@@ -401,12 +408,21 @@ class CheckInView(APIView):
             resultado='permitido',
             autorizado_por=autorizador,
         )
+        # Cada entrada gasta una clase. Con F() y el filtro `> 0` la resta la hace la
+        # base: dos kioscos a la vez no pueden dejarla en negativo ni gastar la misma.
+        clases_restantes = membresia.clases_restantes
+        if clases_restantes is not None:
+            Membresia.objects.filter(id=membresia.id, clases_restantes__gt=0).update(
+                clases_restantes=F('clases_restantes') - 1,
+            )
+            clases_restantes = max(clases_restantes - 1, 0)
         return Response({
             'acceso': 'permitido',
             'socio': f'{socio.nombre} {socio.apellido}',
             'foto': request.build_absolute_uri(socio.foto.url) if socio.foto else None,
             'plan': membresia.plan.nombre,
             'vence': membresia.fecha_fin,
+            'clases_restantes': clases_restantes,
             'visitante': visitante,
             'sin_sucursal': sin_sucursal,
             'sucursal_socio': socio.sucursal.nombre if socio.sucursal_id else None,
@@ -837,9 +853,19 @@ class RegistrarVisitaView(APIView):
                 {'sucursal': 'Solo puedes registrar visitas en tu sucursal.'}
             )
 
+        # Quien ya vino antes (visita o socio inscrito) no se registra otra vez: se le
+        # cobra el día sobre su misma ficha. Si ya tiene membresía vigente no hay nada
+        # que cobrar: su entrada va por el check-in normal.
+        existente = v.get('socio')
+        if existente is not None and Membresia.objects.vigentes().filter(socio=existente).exists():
+            raise ValidationError({
+                'socio': f'{existente} ya tiene una membresía activa: regístrale la '
+                         'entrada desde el check-in.',
+            })
+
         hoy = timezone.localdate()
         with transaction.atomic():
-            socio = Socio.objects.create(
+            socio = existente or Socio.objects.create(
                 gym_id=request.user.gym_id,
                 sucursal=sucursal,
                 nombre=v['nombre'].strip(),

@@ -400,7 +400,19 @@ class MembresiaViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         self._validar_pertenencia(serializer)
-        serializer.save()
+        datos = serializer.validated_data
+        plan = datos.get('plan')
+        extra = {}
+        if plan is not None:
+            # Las clases las pone el servidor: el alta desde Socios no las manda, y sin
+            # esto un semanal nacía sin tope de clases.
+            if datos.get('clases_restantes') is None and plan.num_clases:
+                extra['clases_restantes'] = plan.num_clases
+            # Y la fecha de los planes sin renovación también: el cliente suma días
+            # de calendario y a un semanal le daba ocho.
+            if not plan.renovable and datos.get('fecha_inicio'):
+                extra['fecha_fin'] = plan.fecha_fin_desde(datos['fecha_inicio'])
+        serializer.save(**extra)
 
     def perform_update(self, serializer):
         self._validar_pertenencia(serializer)
@@ -512,11 +524,13 @@ class PagoViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
 
         pago = serializer.save(registrado_por=self.request.user)
 
-        # El pago reactiva la membresía y recorre el período según el plan
+        # El pago reactiva la membresía y recorre el período según el plan. Es también
+        # como vuelve un socio de semanal o visita: no se registra de nuevo, paga sobre
+        # su última membresía y queda activo con días y clases completos.
         plan = membresia.plan
         hoy = timezone.localdate()
         membresia.fecha_inicio = hoy
-        membresia.fecha_fin = hoy + timedelta(days=plan.duracion_dias) if plan.duracion_dias else None
+        membresia.fecha_fin = plan.fecha_fin_desde(hoy)
         if plan.num_clases:
             membresia.clases_restantes = plan.num_clases
         membresia.estado = 'activa'

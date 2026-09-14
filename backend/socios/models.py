@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db import models
 from django.utils import timezone
 from gyms.models import Gym, Sucursal
@@ -5,6 +7,7 @@ from gyms.models import Gym, Sucursal
 
 class Plan(models.Model):
     TIPO_CHOICES = [
+        ('semanal', 'Semanal'),
         ('mensual', 'Mensual'),
         ('trimestral', 'Trimestral'),
         ('semestral', 'Semestral'),
@@ -12,6 +15,11 @@ class Plan(models.Model):
         ('visita', 'Visita Suelta'),
         ('clases', 'Paquete de Clases'),
     ]
+
+    # Planes de uso suelto: quien los compra no se compromete a volver. Cuando se
+    # acaban no son un cobro atrasado —no salen en "Por cobrar", no notifican "pago
+    # vencido"—, el socio simplemente queda sin membresía activa hasta que pague otro.
+    TIPOS_SIN_RENOVACION = ('semanal', 'visita')
 
     gym = models.ForeignKey(Gym, on_delete=models.CASCADE, related_name='planes')
     nombre = models.CharField(max_length=100)
@@ -26,6 +34,25 @@ class Plan(models.Model):
 
     def __str__(self):
         return f'{self.nombre} - ${self.precio}'
+
+    @property
+    def renovable(self):
+        return self.tipo not in self.TIPOS_SIN_RENOVACION
+
+    def fecha_fin_desde(self, inicio):
+        """Último día en que la membresía da acceso, contando `inicio`.
+
+        La visita vale solo ese día. El semanal cuenta días de uso: "7 días" son del
+        día que paga al sexto siguiente, no ocho fechas. Los demás conservan la cuenta
+        de siempre (inicio + duración) para no mover las fechas de quien ya paga así.
+        """
+        if self.tipo == 'visita':
+            return inicio
+        if not self.duracion_dias:
+            return None
+        if self.tipo == 'semanal':
+            return inicio + timedelta(days=self.duracion_dias - 1)
+        return inicio + timedelta(days=self.duracion_dias)
 
     def precio_en(self, sucursal_id):
         """Precio efectivo del plan en una sucursal.
@@ -211,6 +238,10 @@ class MembresiaQuerySet(models.QuerySet):
             fecha_inicio__lte=hoy,
         ).filter(
             models.Q(fecha_fin__gte=hoy) | models.Q(fecha_fin__isnull=True)
+        ).filter(
+            # Con clases contadas (semanal, paquete) se acaba al gastar la última,
+            # aunque le queden días: "5 clases o 7 días, lo que ocurra primero".
+            models.Q(clases_restantes__isnull=True) | models.Q(clases_restantes__gt=0)
         )
 
     def caducadas(self, hoy=None):

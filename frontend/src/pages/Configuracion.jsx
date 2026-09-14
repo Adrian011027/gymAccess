@@ -169,9 +169,17 @@ export default function Configuracion() {
   }
 
   const TIPO_CHOICES = [
-    ['mensual', 'Mensual'], ['trimestral', 'Trimestral'], ['semestral', 'Semestral'],
-    ['anual', 'Anual'], ['visita', 'Visita Suelta'], ['clases', 'Paquete de Clases'],
+    ['semanal', 'Semanal'], ['mensual', 'Mensual'], ['trimestral', 'Trimestral'],
+    ['semestral', 'Semestral'], ['anual', 'Anual'], ['visita', 'Visita Suelta'],
+    ['clases', 'Paquete de Clases'],
   ]
+  // Semanal: 5 clases o 7 días, lo que ocurra primero. Visita: un día. Se proponen al
+  // elegir el tipo; el backend aplica los mismos valores si llegan vacíos.
+  const valoresPorTipo = (tipo, f) => {
+    if (tipo === 'semanal') return { duracion_dias: f.duracion_dias || 7, num_clases: f.num_clases || 5 }
+    if (tipo === 'visita') return { duracion_dias: f.duracion_dias || 1 }
+    return {}
+  }
   const PLAN_EMPTY = { nombre: '', tipo: 'mensual', precio: '', duracion_dias: '', num_clases: '' }
 
   const [planes, setPlanes] = useState([])
@@ -733,7 +741,7 @@ export default function Configuracion() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] font-bold tracking-widest" style={{ color: '#8b949e' }}>TIPO</label>
-                  <select value={planForm.tipo} onChange={e => setPlanForm(f => ({ ...f, tipo: e.target.value }))}
+                  <select value={planForm.tipo} onChange={e => setPlanForm(f => ({ ...f, tipo: e.target.value, ...valoresPorTipo(e.target.value, f) }))}
                     className="mt-1" style={INPUT_STYLE}>
                     {TIPO_CHOICES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>

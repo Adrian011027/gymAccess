@@ -299,6 +299,13 @@ export default function CheckIn() {
                 <div className="mt-3 text-sm space-y-1" style={{ color: '#8b949e' }}>
                   <p>Plan: <span className="text-white font-semibold">{result.plan}</span></p>
                   <p>Vence: <span className="text-white font-semibold">{result.vence ?? 'Sin fecha límite'}</span></p>
+                  {/* Planes con clases contadas (semanal, paquete): la entrada ya gastó
+                      una, y lo que queda es lo que el socio pregunta en la puerta. */}
+                  {result.clases_restantes != null && (
+                    <p>Clases restantes: <span className="font-semibold" style={{ color: result.clases_restantes === 0 ? '#f97316' : '#fff' }}>
+                      {result.clases_restantes}{result.clases_restantes === 0 ? ' (era la última)' : ''}
+                    </span></p>
+                  )}
                   {result.visitante && (
                     <p style={{ color: '#f97316' }}>
                       Visita de <span className="font-semibold">{result.sucursal_socio}</span>

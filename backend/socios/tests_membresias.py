@@ -470,7 +470,8 @@ class PagoReactivaMembresiaTests(MembresiaBase):
         self.assertEqual(membresia.clases_restantes, 10)
         self.assertEqual(membresia.estado, 'activa')
 
-    def test_plan_sin_duracion_deja_fecha_fin_nula(self):
+    def test_pagar_una_visita_sin_duracion_vale_solo_por_hoy(self):
+        """Antes dejaba fecha_fin nula: un pase indefinido cobrado como un día."""
         plan_visita = Plan.objects.create(
             gym=self.gym, nombre='Visita', tipo='visita', precio=80,
         )
@@ -483,7 +484,7 @@ class PagoReactivaMembresiaTests(MembresiaBase):
             'membresia': membresia.id, 'monto': '80.00', 'metodo': 'efectivo',
         })
         membresia.refresh_from_db()
-        self.assertIsNone(membresia.fecha_fin)
+        self.assertEqual(membresia.fecha_fin, HOY())
 
     def test_pago_sobre_membresia_de_otro_gym_es_rechazado(self):
         otra_sucursal = Sucursal.objects.create(gym=self.otro_gym, nombre='Ajena')

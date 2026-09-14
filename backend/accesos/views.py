@@ -342,20 +342,6 @@ class CheckInView(APIView):
         ya_entro_hoy = Acceso.objects.filter(
             socio=socio, resultado='permitido', timestamp__date=timezone.localdate(),
         ).exists()
-        if ya_entro_hoy:
-            Acceso.objects.create(
-                socio=socio,
-                sucursal=sucursal,
-                membresia=membresia,
-                metodo_usado=metodo_usado,
-                resultado='denegado',
-                motivo_denegado='ya_registrado',
-            )
-            return Response({
-                'acceso': 'denegado',
-                'socio': f'{socio.nombre} {socio.apellido}',
-                'motivo': 'ya se registró su acceso hoy: no puede entrar dos veces el mismo día',
-            }, status=status.HTTP_403_FORBIDDEN)
 
         # El socio está al corriente, pero puede no ser de esta sucursal. Qué hacer en
         # ese caso lo decide el dueño en la configuración del gym: hay negocios donde
@@ -383,6 +369,9 @@ class CheckInView(APIView):
                 if autoriza_ahora:
                     autorizador = request.user
                 if politica == 'bloqueado' or not autoriza_ahora:
+                    # "Otra sucursal" va antes que "ya entró hoy": es lo que decide qué
+                    # hace recepción (mandarlo a su local o autorizarlo). Que además ya
+                    # entró hoy viaja como dato aparte, debajo en el kiosco.
                     Acceso.objects.create(
                         socio=socio,
                         sucursal=sucursal,
@@ -396,9 +385,26 @@ class CheckInView(APIView):
                         'socio': f'{socio.nombre} {socio.apellido}',
                         'motivo': 'pertenece a otra sucursal',
                         'sucursal_socio': socio.sucursal.nombre,
-                        # Le dice al kiosco si tiene sentido ofrecer el override.
-                        'requiere_autorizacion': politica == 'autorizacion',
+                        'ya_entro_hoy': ya_entro_hoy,
+                        # Le dice al kiosco si tiene sentido ofrecer el override. Si ya
+                        # entró hoy no lo tiene: autorizar terminaría en otro rechazo.
+                        'requiere_autorizacion': politica == 'autorizacion' and not ya_entro_hoy,
                     }, status=status.HTTP_403_FORBIDDEN)
+
+        if ya_entro_hoy:
+            Acceso.objects.create(
+                socio=socio,
+                sucursal=sucursal,
+                membresia=membresia,
+                metodo_usado=metodo_usado,
+                resultado='denegado',
+                motivo_denegado='ya_registrado',
+            )
+            return Response({
+                'acceso': 'denegado',
+                'socio': f'{socio.nombre} {socio.apellido}',
+                'motivo': 'ya se registró su acceso hoy: no puede entrar dos veces el mismo día',
+            }, status=status.HTTP_403_FORBIDDEN)
 
         Acceso.objects.create(
             socio=socio,

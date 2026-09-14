@@ -304,6 +304,70 @@ class PoliticaVisitantesTests(BaseDosSucursales):
         resp = self.checkin(password='Passw0rd1')
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
+    def entro_hoy_en_su_sucursal(self):
+        Acceso.objects.create(
+            socio=self.socio_centro, sucursal=self.centro,
+            resultado='permitido', metodo_usado='qr',
+        )
+
+    def test_otra_sucursal_se_dice_antes_que_ya_entro_hoy(self):
+        """Lo primero que recepción necesita es de dónde es; que ya entró va debajo."""
+        self.gym.politica_visitantes = 'bloqueado'
+        self.gym.save()
+        self.entro_hoy_en_su_sucursal()
+
+        resp = self.checkin()
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.data['motivo'], 'pertenece a otra sucursal')
+        self.assertTrue(resp.data['ya_entro_hoy'])
+        self.assertEqual(
+            Acceso.objects.get(resultado='denegado').motivo_denegado, 'otra_sucursal',
+        )
+
+    def test_si_ya_entro_hoy_no_ofrece_autorizar(self):
+        """Autorizarlo terminaría en otro rechazo: el botón no tiene sentido."""
+        self.gym.politica_visitantes = 'autorizacion'
+        self.gym.save()
+        self.entro_hoy_en_su_sucursal()
+
+        resp = self.checkin()
+
+        self.assertEqual(resp.data['motivo'], 'pertenece a otra sucursal')
+        self.assertTrue(resp.data['ya_entro_hoy'])
+        self.assertFalse(resp.data['requiere_autorizacion'])
+
+    def test_autorizado_pero_ya_entro_hoy_se_rechaza_igual(self):
+        self.gym.politica_visitantes = 'autorizacion'
+        self.gym.save()
+        self.entro_hoy_en_su_sucursal()
+
+        resp = self.checkin(autorizar=True)
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('ya se registró', resp.data['motivo'])
+        self.assertEqual(
+            Acceso.objects.get(resultado='denegado').motivo_denegado, 'ya_registrado',
+        )
+
+    def test_con_politica_libre_solo_dice_que_ya_entro_hoy(self):
+        self.gym.politica_visitantes = 'libre'
+        self.gym.save()
+        self.entro_hoy_en_su_sucursal()
+
+        resp = self.checkin()
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('ya se registró', resp.data['motivo'])
+
+    def test_primera_entrada_del_dia_en_otra_sucursal_no_marca_ya_entro(self):
+        self.gym.politica_visitantes = 'bloqueado'
+        self.gym.save()
+
+        resp = self.checkin()
+
+        self.assertFalse(resp.data['ya_entro_hoy'])
+
     def test_socio_de_su_propia_sucursal_no_pide_nada(self):
         self.gym.politica_visitantes = 'bloqueado'
         self.gym.save()

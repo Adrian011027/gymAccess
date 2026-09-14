@@ -275,6 +275,22 @@ class Membresia(models.Model):
     def __str__(self):
         return f'{self.socio} - {self.plan} ({self.estado})'
 
+    def es_vigente(self, hoy=None):
+        """Lo mismo que `Membresia.objects.vigentes()`, sobre una membresía ya cargada.
+
+        Existe para el listado de socios, que precarga todas las membresías: preguntar
+        a la base por cada socio eran dos consultas más por fila. Si la regla cambia en
+        `vigentes()` tiene que cambiar aquí: la prueba de paridad
+        (socios/tests_rendimiento_listado.py) compara las dos en cada caso.
+        """
+        hoy = hoy or timezone.localdate()
+        return (
+            self.estado == 'activa'
+            and self.fecha_inicio <= hoy
+            and (self.fecha_fin is None or self.fecha_fin >= hoy)
+            and (self.clases_restantes is None or self.clases_restantes > 0)
+        )
+
     def ajustar_a_plan(self, plan, hoy=None):
         """Aplica las reglas del plan nuevo al cambiar de plan, sin regalar nada.
 

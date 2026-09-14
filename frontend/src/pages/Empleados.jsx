@@ -84,7 +84,7 @@ export default function Empleados() {
     setBajaError('')
     try {
       await api.delete(`/usuarios/${baja.id}/`)
-      toast.success(`${baja.nombre} fue dado de baja`)
+      toast.success(`${baja.nombre} fue eliminado`)
       setBaja(null)
       cargarUsuarios()
     } catch (err) {
@@ -247,14 +247,16 @@ export default function Empleados() {
       {baja && (
         <div className="fixed inset-0 flex items-center justify-center z-[60] p-4 overflow-y-auto" style={{ backgroundColor: 'rgba(0,0,0,0.8)' }}>
           <div className="rounded-2xl p-6 w-full max-w-sm my-auto max-h-[90vh] overflow-y-auto" style={CARD_STYLE}>
-            <h2 className="text-sm font-bold text-white">Dar de baja a un empleado</h2>
+            <h2 className="text-sm font-bold text-white">Eliminar empleado</h2>
             <p className="text-xs mt-2 leading-relaxed" style={{ color: '#8b949e' }}>
               <span className="text-white font-semibold">{baja.nombre}</span> dejará de
-              poder iniciar sesión de inmediato.
+              poder iniciar sesión de inmediato y desaparecerá del sistema.
             </p>
+            {/* Se dice qué pasa con su historial: tras la purga los movimientos quedan
+                sin responsable, y eso hay que saberlo antes de confirmar. */}
             <p className="text-[10px] mt-2 leading-relaxed" style={{ color: '#8b949e' }}>
-              Su historial no se borra: los pagos que cobró y las autorizaciones que dio
-              siguen registrados a su nombre, o la bitácora se quedaría sin responsable.
+              Su cuenta se borra definitivamente en 30 días. Los pagos, ventas y accesos que
+              registró se conservan, pero ya sin su nombre. Esto no se puede deshacer.
             </p>
             <form onSubmit={confirmarBaja} className="space-y-3 mt-4">
               <div>
@@ -282,7 +284,7 @@ export default function Empleados() {
                   disabled={bajaLoading || bajaTexto.trim().toLowerCase() !== 'eliminar'}
                   className="flex-1 py-2.5 rounded-lg text-xs font-bold disabled:opacity-40"
                   style={{ backgroundColor: '#ef4444', color: '#fff' }}>
-                  {bajaLoading ? 'Dando de baja...' : 'Eliminar'}
+                  {bajaLoading ? 'Eliminando...' : 'Eliminar'}
                 </button>
               </div>
             </form>

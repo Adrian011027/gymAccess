@@ -376,6 +376,21 @@ sudo /usr/local/bin/backup-gymaccess.sh
 zcat /var/backups/gymaccess-$(date +%F).sql.gz | head -20    # tiene SQL real
 ```
 
+### Purga diaria de empleados eliminados
+
+Un empleado eliminado desde Empleados desaparece del sistema en el acto y su cuenta se
+borra definitivamente a los 30 días (`usuarios/eliminacion.py`). El backend la corre al
+arrancar, pero entre despliegues hace falta el cron. Se **agrega** a la crontab existente:
+`crontab -` a secas la reemplazaría y se llevaría el backup de arriba.
+
+```bash
+(sudo crontab -l; echo '30 3 * * * cd /opt/gymaccess && docker compose exec -T backend python manage.py purgar_empleados_eliminados') | sudo crontab -
+```
+
+**Verificación**: `sudo crontab -l` muestra las dos líneas, y
+`docker compose exec backend python manage.py purgar_empleados_eliminados --dry-run`
+dice cuántos se borrarían.
+
 ---
 
 ## Paso 9 · Verificación final, con el negocio de verdad

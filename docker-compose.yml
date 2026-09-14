@@ -71,9 +71,12 @@ services:
     # salto de línea en vez de plegarse. Partir los flags de gunicorn en una línea
     # extra indentada hacía que `sh` recibiera tres comandos y respondiera
     # `--bind: not found`. Con `>-` y una sola indentación, todo queda en una línea.
+    # La purga de empleados eliminados (>30 días) corre aquí además del cron diario del
+    # plan de despliegue. Va con `|| true`: si fallara, el backend tiene que arrancar igual.
     command: >-
       sh -c "python manage.py migrate --noinput &&
       python manage.py collectstatic --noinput &&
+      (python manage.py purgar_empleados_eliminados || true) &&
       exec gunicorn gymaccess.wsgi:application --bind 0.0.0.0:8000
       --workers 3 --timeout 60 --access-logfile - --error-logfile -"
 

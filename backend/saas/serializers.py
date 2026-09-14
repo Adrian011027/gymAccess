@@ -87,12 +87,15 @@ class AltaTenantSerializer(serializers.Serializer):
     admin_password = serializers.CharField(write_only=True, min_length=8, trim_whitespace=False)
 
     def validate_admin_email(self, value):
-        if Usuario.objects.filter(email__iexact=value).exists():
+        # Un empleado eliminado no cuenta: su cuenta se purga en `create`.
+        if Usuario.objects.filter(email__iexact=value, eliminado_en__isnull=True).exists():
             raise serializers.ValidationError('Ya existe un usuario con ese correo.')
         return value
 
     @transaction.atomic
     def create(self, validated):
+        from usuarios.eliminacion import purgar_eliminados
+        purgar_eliminados(email=validated['admin_email'])
         gym = Gym.objects.create(
             nombre=validated['nombre'],
             tipo=validated['tipo'],

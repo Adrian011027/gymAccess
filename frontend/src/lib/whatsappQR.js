@@ -40,10 +40,17 @@ export function destinatarioWhatsApp(socio) {
 // El enlace al PNG solo se manda si el servidor es alcanzable desde el teléfono del
 // socio. En desarrollo la URL apunta a localhost y mandarla sería darle al socio un
 // enlace muerto; ahí el mensaje va sin ella y queda el pegado con Ctrl+V.
+// Con `npm run dev` el enlace a localhost SÍ se manda: quien prueba abre WhatsApp Web
+// en la misma computadora y necesita ver el enlace para revisar el aviso y el QR como
+// los verá el socio. En el build (MODE 'production') y en las pruebas (MODE 'test')
+// se sigue descartando, porque ahí un enlace a localhost es un enlace muerto.
+const ENLACE_LOCAL_PERMITIDO = import.meta.env?.MODE === 'development'
+
 export function urlPublicaDelQR(url) {
   if (!url) return null
   try {
     const { hostname } = new URL(url)
+    if (ENLACE_LOCAL_PERMITIDO) return url
     const privada = hostname === 'localhost'
       || hostname === '[::1]'
       || hostname.startsWith('127.')

@@ -157,6 +157,51 @@ class SinRenovacionNoEsCobroTests(PlanesBase):
         self.assertFalse(socio['membresia_reciente']['renovable'])
 
 
+class PaqueteDeClasesSinRenovacionTests(PlanesBase):
+    """El paquete de clases se compra cuando se necesita: acabado no es un cobro."""
+
+    def setUp(self):
+        super().setUp()
+        self.paquete = Plan.objects.create(
+            gym=self.gym, nombre='10 clases', tipo='clases', precio=Decimal('800'), num_clases=10,
+        )
+
+    def test_no_se_renueva(self):
+        self.assertFalse(self.paquete.renovable)
+
+    def test_sin_clases_se_niega_como_sin_membresia_y_no_avisa_pago_vencido(self):
+        self.membresia(self.paquete, clases_restantes=0)
+
+        resp = self.checkin()
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.data['motivo'], 'no tiene membresía activa')
+        self.assertEqual(Acceso.objects.get(socio=self.socio).motivo_denegado, 'sin_membresia')
+        self.assertFalse(Notificacion.objects.filter(tipo='pago_vencido').exists())
+
+    def test_no_sale_como_cobro_pendiente(self):
+        m = self.membresia(self.paquete, clases_restantes=0)
+
+        datos = {x['id']: x for x in self.client.get('/api/socios/membresias/').data}
+
+        self.assertFalse(datos[m.id]['plan_renovable'])
+
+    def test_sin_dias_en_el_plan_dura_hasta_gastar_las_clases(self):
+        m = self.membresia(self.paquete, inicio=HOY() - timedelta(days=90))
+
+        self.assertIsNone(m.fecha_fin)
+        self.assertTrue(Membresia.objects.vigentes().filter(id=m.id).exists())
+
+    def test_pagar_lo_reactiva_con_todas_sus_clases(self):
+        m = self.membresia(self.paquete, clases_restantes=0)
+
+        self.client.post('/api/socios/pagos/', {'membresia': m.id, 'monto': '800', 'metodo': 'efectivo'})
+
+        m.refresh_from_db()
+        self.assertEqual(m.clases_restantes, 10)
+        self.assertTrue(Membresia.objects.vigentes().filter(id=m.id).exists())
+
+
 class VolverAPagarTests(PlanesBase):
     def test_pagar_reactiva_el_semanal_con_dias_y_clases_completos(self):
         m = self.membresia(self.semanal, inicio=HOY() - timedelta(days=10), clases_restantes=0)

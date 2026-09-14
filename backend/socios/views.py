@@ -77,9 +77,20 @@ class SocioViewSet(SucursalScopedMixin, viewsets.ModelViewSet):
         return super().get_permissions()
 
     def get_queryset(self):
+        from legal.models import ConsentimientoSocio
+        # Todo lo que SocioSerializer lee de cada socio se trae de una vez. Sin esto el
+        # listado hacía ~5 consultas por socio (membresía vigente, la más reciente, sus
+        # planes y el consentimiento): 1,002 consultas para 200 socios.
         qs = Socio.objects.filter(
             gym_id=self.request.user.gym_id
-        ).select_related('sucursal').prefetch_related('metodos_acceso')
+        ).select_related('sucursal').prefetch_related(
+            'metodos_acceso',
+            models.Prefetch('membresias', queryset=Membresia.objects.select_related('plan')),
+            models.Prefetch(
+                'consentimientos',
+                queryset=ConsentimientoSocio.objects.select_related('documento'),
+            ),
+        )
         # `restaurar` tiene que poder alcanzar justamente al que está eliminado, y el
         # resto de acciones de detalle operan sobre socios vivos: filtrarlas aquí
         # devolvería 404 al intentar deshacer una baja.

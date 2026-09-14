@@ -134,7 +134,10 @@ export default function Socios() {
 
   // Debounce: sin el, cada tecla dispara una consulta que cruza sucursales.
   useEffect(() => {
-    const t = setTimeout(() => load(search), 300)
+    // La espera es solo para teclear: al abrir la página, al borrar la búsqueda o al
+    // cambiar de sucursal se pide de inmediato. Con 300 ms fijos, cada visita a Socios
+    // arrancaba esperando sin motivo.
+    const t = setTimeout(() => load(search), search.trim() ? 300 : 0)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, sucursalFiltro])

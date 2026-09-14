@@ -116,7 +116,9 @@ class SocioSerializer(serializers.ModelSerializer):
         Va en el listado para que se vea de un vistazo a quién le falta: un socio
         sin consentimiento es un hueco que hay que cerrar, no un detalle.
         """
-        c = obj.consentimientos.order_by('-aceptado_en').first()
+        # Sobre `.all()` y no con order_by: el listado los precarga y una consulta aquí
+        # era una por socio.
+        c = max(obj.consentimientos.all(), key=lambda c: (c.aceptado_en, c.id), default=None)
         if not c:
             return None
         return {
@@ -194,10 +196,19 @@ class SocioSerializer(serializers.ModelSerializer):
         return url_qr(request, m.token)
 
     def get_membresia_activa(self, obj):
-        # Misma definición de "vigente" que usa el check-in (Membresia.objects.vigentes).
-        # No basta con estado='activa': nada mueve el estado a 'vencida' cuando pasa
-        # fecha_fin, así que hay que comparar fechas aquí también.
-        m = obj.membresias.vigentes().first()
+        # Misma definición de "vigente" que usa el check-in: `es_vigente` es la versión
+        # en memoria de Membresia.objects.vigentes(). No basta con estado='activa': nada
+        # mueve el estado a 'vencida' cuando pasa fecha_fin.
+        #
+        # Se filtra en Python sobre `.all()` porque el listado precarga las membresías
+        # (SocioViewSet.get_queryset); consultar aquí eran dos consultas por socio. El
+        # menor id reproduce el `.first()` de antes sobre un queryset sin orden.
+        from django.utils import timezone
+        hoy = timezone.localdate()
+        m = min(
+            (m for m in obj.membresias.all() if m.es_vigente(hoy)),
+            key=lambda m: m.id, default=None,
+        )
         if not m:
             return None
         return {
@@ -211,7 +222,8 @@ class SocioSerializer(serializers.ModelSerializer):
         """La última membresía exista o no vigencia. `membresia_activa` es null para un
         socio vencido, que es justo a quien hay que ajustarle la fecha de próximo pago.
         """
-        m = obj.membresias.order_by('-fecha_inicio', '-id').first()
+        # Mismo orden que el order_by('-fecha_inicio', '-id') de antes, sobre lo precargado.
+        m = max(obj.membresias.all(), key=lambda m: (m.fecha_inicio, m.id), default=None)
         if not m:
             return None
         # `plan_id` además del nombre: la pantalla de edición preselecciona el plan en
